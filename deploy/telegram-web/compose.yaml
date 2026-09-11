@@ -1,0 +1,47 @@
+name: telegram-web
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: deploy/telegram-web/Dockerfile
+    image: telegram-web:local
+    restart: unless-stopped
+    init: true
+    read_only: true
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 64m
+    cpus: 0.25
+    pids_limit: 64
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    ports:
+      # This is the LXC's Tailscale address. Do not widen this to 0.0.0.0.
+      - "100.124.236.66:8080:8080"
+    volumes:
+      - type: volume
+        source: nginx_cache
+        target: /var/cache/nginx
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    networks:
+      - web
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+volumes:
+  nginx_cache:
+    name: telegram-web_nginx-cache
+
+networks:
+  web:
+    name: telegram-web_default
+    internal: true

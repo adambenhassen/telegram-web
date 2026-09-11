@@ -1,0 +1,14 @@
+.git
+.git/**
+node_modules
+node_modules/**
+.pnpm-store
+.pnpm-store/**
+dist
+dist/**
+coverage
+coverage/**
+test-results
+test-results/**
+playwright-report
+playwright-report/**
