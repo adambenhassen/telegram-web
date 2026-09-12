@@ -4,8 +4,6 @@ import type {RSAPublicKeyHex} from '@lib/mtproto/rsaKeysManager';
 import '../lib/crypto/crypto.worker';
 import cryptoWorker from '@lib/crypto/cryptoMessagePort';
 
-const deliberateCiTypeError: string = 1;
-
 test('factorize', async() => {
   const data: {good?: [Uint8Array, Uint8Array], pq: Uint8Array}[] = [{
     good: [new Uint8Array([86, 190, 62, 123]), new Uint8Array([88, 30, 39, 1])],
