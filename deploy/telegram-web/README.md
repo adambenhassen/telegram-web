@@ -2,7 +2,10 @@
 
 This is the deployment-only Compose project for the Telegram Web K static
 artifact. It is intentionally separate from the development Compose file at
-the repository root and from `/opt/telegram-server`.
+the repository root and from `/opt/telegram-server`. Its explicit
+`telegram-web-edge` project, `telegram-web-edge-net` network, and
+`telegram-web-edge-nginx-cache` volume names keep a root-directory Compose
+invocation from selecting this stack by basename.
 
 The target checkout is `/opt/telegram-web`. Run the commands below from this
 directory:

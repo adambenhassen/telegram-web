@@ -1,4 +1,4 @@
-name: telegram-web
+name: telegram-web-edge
 
 services:
   web:
@@ -39,9 +39,9 @@ services:
 
 volumes:
   nginx_cache:
-    name: telegram-web_nginx-cache
+    name: telegram-web-edge-nginx-cache
 
 networks:
   web:
-    name: telegram-web_default
+    name: telegram-web-edge-net
     internal: true
