@@ -1,0 +1,51 @@
+name: Deployment Stack Checks
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Build deployment image
+        run: docker build --pull --file deploy/telegram-web/Dockerfile --tag telegram-web:ci .
+
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Validate Compose project isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          edge_config="$(docker compose -f deploy/telegram-web/compose.yaml config --format json)"
+          root_config="$(docker compose -f docker-compose.yaml config --format json)"
+
+          jq -e '
+            .name == "telegram-web-edge" and
+            .networks.web.name == "telegram-web-edge-net" and
+            .volumes.nginx_cache.name == "telegram-web-edge-nginx-cache"
+          ' <<<"$edge_config"
+          jq -e '
+            .name == "telegram-web" and
+            .networks.default.name == "telegram-web_default"
+          ' <<<"$root_config"
