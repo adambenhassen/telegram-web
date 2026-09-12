@@ -31,7 +31,7 @@ endpoints: the browser reports a CSP violation and the client remains a
 placeholder until a local endpoint is deliberately configured in a later
 client/server change.
 
-The only persistent volume is `telegram-web_nginx-cache`, owned by this Compose
+The only persistent volume is `telegram-web-edge-nginx-cache`, owned by this Compose
 project. `docker compose down` is safe and leaves that cache intact; never use
 `docker compose down -v` on this host.
 
