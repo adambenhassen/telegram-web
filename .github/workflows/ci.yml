@@ -1,0 +1,43 @@
+name: Pull Request CI
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    name: Build, typecheck, lint and test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # build runs the repository's full test suite and typecheck before bundling.
+      - name: Build, typecheck and test
+        run: pnpm run build
+
+      - name: Lint
+        run: pnpm run lint

@@ -275,13 +275,15 @@ describe('AES-CTR', () => {
   const encrypt = (data: Uint8Array) => update(data, 'encrypt');
   const decrypt = (data: Uint8Array) => update(data, 'decrypt');
 
+  const prepare = () => cryptoWorker.invokeCrypto('aes-ctr-prepare', {
+    encKey: bytesFromHex('903547a2e1ebb870f90c44bcf2d221b33fe8e28130e7995a3cf7840ff37758ae'),
+    encIv: new Uint8Array([125, 161, 46, 206, 12, 22, 182, 3, 245, 28, 86, 210, 27, 124, 142, 9]),
+    decKey: bytesFromHex('f8b5c86802a2a15484818e857be700cc2c3ddf711e5eb421085d629f0c73eec0'),
+    decIv: bytesFromHex('04baf6934a65f5521e1f806e573c0ca0')
+  });
+
   beforeAll(async() => {
-    id = await cryptoWorker.invokeCrypto('aes-ctr-prepare', {
-      encKey: bytesFromHex('903547a2e1ebb870f90c44bcf2d221b33fe8e28130e7995a3cf7840ff37758ae'),
-      encIv: new Uint8Array([125, 161, 46, 206, 12, 22, 182, 3, 245, 28, 86, 210, 27, 124, 142, 9]),
-      decKey: bytesFromHex('f8b5c86802a2a15484818e857be700cc2c3ddf711e5eb421085d629f0c73eec0'),
-      decIv: bytesFromHex('04baf6934a65f5521e1f806e573c0ca0')
-    });
+    id = await prepare();
   });
 
   test('encrypt', async() => {
@@ -296,6 +298,30 @@ describe('AES-CTR', () => {
     expect(encrypted).toEqual(good);
 
     // expect(encrypted).toEqual(good);
+  });
+
+  test('encrypts non-aligned chunks consistently', async() => {
+    const singleCallId = await prepare();
+    const chunkedId = await prepare();
+    const data = new Uint8Array(Array.from({length: 20}, (_, index) => index));
+
+    const singleCall = await cryptoWorker.invokeCrypto('aes-ctr-process', {
+      id: singleCallId,
+      operation: 'encrypt',
+      data
+    });
+    const chunkedHead = await cryptoWorker.invokeCrypto('aes-ctr-process', {
+      id: chunkedId,
+      operation: 'encrypt',
+      data: data.slice(0, 12)
+    });
+    const chunkedTail = await cryptoWorker.invokeCrypto('aes-ctr-process', {
+      id: chunkedId,
+      operation: 'encrypt',
+      data: data.slice(12)
+    });
+
+    expect(chunkedHead.concat(chunkedTail)).toEqual(singleCall);
   });
 
   test('decrypt', async() => {
@@ -329,12 +355,10 @@ describe('AES-CTR', () => {
       ]
     ];
 
-    for(const [encryptedHex, resultHex] of d) {
+    await Promise.all(d.map(async([encryptedHex, resultHex]) => {
       const encrypted = bytesFromHex(encryptedHex);
-      const promise = decrypt(encrypted);
-      promise.then((decrypted) => {
-        expect(bytesToHex(decrypted)).toEqual(resultHex);
-      });
-    }
+      const decrypted = await decrypt(encrypted);
+      expect(bytesToHex(decrypted)).toEqual(resultHex);
+    }));
   });
 });
