@@ -105,7 +105,7 @@ jobs:
             .services.web.ports[0].target == 8080 and
             .services.web.ports[0].published == "8080" and
             .networks.web.name == "telegram-web-edge-net" and
-            .networks.web.internal == true and
+            (.networks.web.internal // false) == false and
             .volumes.nginx_cache.name == "telegram-web-edge-nginx-cache"
           ' <<<"$edge_config"
           jq -e '
@@ -121,15 +121,25 @@ jobs:
           cat >"$override_file" <<'EOF'
           services:
             web:
-              ports: !reset []
+              ports: !override
+                - "127.0.0.1:18080:8080"
           EOF
           compose_files+=(--file "$override_file")
 
           cleanup() {
-            docker compose "${compose_files[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+            docker compose "${compose_files[@]}" down --remove-orphans >/dev/null 2>&1 || true
             rm -f "$override_file"
           }
           trap cleanup EXIT
+
+          runtime_config="$(docker compose "${compose_files[@]}" config --format json)"
+          jq -e '
+            .name == "telegram-web-edge-ci" and
+            (.services.web.ports | length == 1) and
+            .services.web.ports[0].host_ip == "127.0.0.1" and
+            .services.web.ports[0].target == 8080 and
+            .services.web.ports[0].published == "18080"
+          ' <<<"$runtime_config"
 
           docker compose "${compose_files[@]}" up --build --detach
 
@@ -149,4 +159,21 @@ jobs:
             exit 1
           fi
 
-          test "$(docker compose "${compose_files[@]}" exec --no-TTY web wget --quiet --output-document=- http://127.0.0.1:8080/healthz)" = "ok"
+          effective_port="$(docker port "$container_id" 8080/tcp)"
+          test "$effective_port" = "127.0.0.1:18080"
+
+          host_health=""
+          host_ready=0
+          for attempt in {1..30}; do
+            if host_health="$(curl --fail --silent http://127.0.0.1:18080/healthz)" && [ "$host_health" = "ok" ]; then
+              host_ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$host_ready" -ne 1 ]; then
+            docker compose "${compose_files[@]}" ps
+            docker compose "${compose_files[@]}" logs
+            exit 1
+          fi
+          test "$host_health" = "ok"
