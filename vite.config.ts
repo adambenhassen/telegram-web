@@ -12,7 +12,11 @@ import {ServerOptions} from 'vite';
 import {watchLangFile} from './watch-lang.js';
 import devChecks from './scripts/dev-checks.mjs';
 import settingsSearchPlugin from './scripts/settings-search-plugin.mjs';
+import {assertRunnableMtprotoTarget, resolveMtprotoTarget} from './scripts/mtproto-target.mjs';
 import path from 'path';
+
+const mtprotoTarget = resolveMtprotoTarget(process.env);
+assertRunnableMtprotoTarget(mtprotoTarget);
 
 const rootDir = resolve(__dirname);
 const certsDir = path.join(rootDir, 'certs');
