@@ -86,7 +86,7 @@ jobs:
       - name: Check out code
         uses: actions/checkout@v4
 
-      - name: Validate Compose project isolation
+      - name: Validate Compose project isolation and startup
         shell: bash
         run: |
           set -euo pipefail
@@ -95,11 +95,58 @@ jobs:
 
           jq -e '
             .name == "telegram-web-edge" and
-            .services.web.pids_limit == null and
+            (.services.web | has("mem_limit") | not) and
+            (.services.web | has("cpus") | not) and
+            (.services.web | has("pids_limit") | not) and
+            .services.web.read_only == true and
+            (.services.web.security_opt | index("no-new-privileges:true")) and
+            (.services.web.ports | length == 1) and
+            .services.web.ports[0].host_ip == "100.124.236.66" and
+            .services.web.ports[0].target == 8080 and
+            .services.web.ports[0].published == "8080" and
             .networks.web.name == "telegram-web-edge-net" and
+            .networks.web.internal == true and
             .volumes.nginx_cache.name == "telegram-web-edge-nginx-cache"
           ' <<<"$edge_config"
           jq -e '
             .name == "telegram-web" and
             .networks.default.name == "telegram-web_default"
           ' <<<"$root_config"
+
+          compose_files=(
+            --project-name telegram-web-edge-ci
+            --file deploy/telegram-web/compose.yaml
+          )
+          override_file="$(mktemp)"
+          cat >"$override_file" <<'EOF'
+          services:
+            web:
+              ports: !reset []
+          EOF
+          compose_files+=(--file "$override_file")
+
+          cleanup() {
+            docker compose "${compose_files[@]}" down --volumes --remove-orphans >/dev/null 2>&1 || true
+            rm -f "$override_file"
+          }
+          trap cleanup EXIT
+
+          docker compose "${compose_files[@]}" up --build --detach
+
+          container_id=""
+          ready=0
+          for attempt in {1..30}; do
+            container_id="$(docker compose "${compose_files[@]}" ps --quiet web)"
+            if [ -n "$container_id" ] && [ "$(docker inspect --format '{{.State.Health.Status}}' "$container_id")" = "healthy" ]; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker compose "${compose_files[@]}" ps
+            docker compose "${compose_files[@]}" logs
+            exit 1
+          fi
+
+          test "$(docker compose "${compose_files[@]}" exec --no-TTY web wget --quiet --output-document=- http://127.0.0.1:8080/healthz)" = "ok"
