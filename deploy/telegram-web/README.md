@@ -21,9 +21,12 @@ host-side port is explicitly bound to `tailscale0`; it must not be changed to
 `0.0.0.0` or published through Funnel.
 
 The image copies the committed `public/` artifact directly. It does not run a
-Node or Vite build on the LXC, keeping the web service within a 64 MiB and 0.25
-CPU limit while leaving the box's CPU and memory for Postgres and `telegramd`.
-Nginx logs go to the container log with Docker's 10 MiB, three-file rotation.
+Node or Vite build on the LXC. Resource isolation is provided by the target
+LXC's existing 2 vCPU and 4 GiB allocation, leaving the box's CPU and memory
+for Postgres and `telegramd`; the nested Docker cgroup exposes no controllers,
+so this Compose service deliberately requests no per-container memory, CPU, or
+PID limit. Nginx logs go to the container log with Docker's 10 MiB, three-file
+rotation.
 
 The enforced CSP allows `connect-src 'self'` only. The current Web K artifact
 therefore cannot open its hard-coded official Telegram WebSocket or HTTP

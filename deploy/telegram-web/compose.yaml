@@ -11,8 +11,8 @@ services:
     read_only: true
     security_opt:
       - no-new-privileges:true
-    mem_limit: 64m
-    cpus: 0.25
+    # Resource limits are enforced at the target LXC boundary. The nested
+    # Docker cgroup exposes no controllers for per-container limits.
     logging:
       driver: json-file
       options:
