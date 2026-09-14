@@ -27,8 +27,8 @@ function normalizeEndpoint(value) {
   let endpoint;
   try {
     endpoint = new URL(value);
-  } catch(cause) {
-    throw new Error(`${PRIVATE_ENDPOINT} must be an absolute wss URL`, {cause});
+  } catch{
+    throw new Error(`${PRIVATE_ENDPOINT} must be an absolute wss URL`);
   }
 
   if(endpoint.protocol !== 'wss:') {

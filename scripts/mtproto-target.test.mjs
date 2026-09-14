@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
+import {inspect} from 'node:util';
 import {afterAll, describe, expect, it} from 'vitest';
 import {assertRunnableMtprotoTarget, resolveMtprotoTarget} from './mtproto-target.mjs';
 
@@ -129,6 +130,22 @@ describe('MTProto build target', () => {
     'wss://ＴＥＬＥＧＲＡＭ．ＯＲＧ/apiws'
   ])('rejects private endpoint %s', (endpoint) => {
     expect(() => resolveMtprotoTarget(privateEnv({MTPROTO_PRIVATE_ENDPOINT: endpoint}))).toThrow();
+  });
+
+  it('does not retain malformed endpoint credentials in the complete error', () => {
+    const credentialMarker = 'credential-marker';
+    let thrown;
+    try {
+      resolveMtprotoTarget(privateEnv({
+        MTPROTO_PRIVATE_ENDPOINT: `wss://build-user:${credentialMarker}@%`
+      }));
+    } catch(error) {
+      thrown = error;
+    }
+
+    const rendered = inspect(thrown, {depth: null});
+    expect(rendered).toMatch(/must be an absolute wss URL/);
+    expect(rendered).not.toContain(credentialMarker);
   });
 
   it('rejects an unreadable key file', () => {
