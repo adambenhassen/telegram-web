@@ -43,4 +43,3 @@ volumes:
 networks:
   web:
     name: telegram-web-edge-net
-    internal: true

@@ -20,6 +20,10 @@ The SPA is available at `http://100.124.236.66:8080/` from the tailnet. The
 host-side port is explicitly bound to `tailscale0`; it must not be changed to
 `0.0.0.0` or published through Funnel.
 
+The Compose network is not marked `internal`, because Docker must publish this
+host-side listener. The exact Tailscale host binding is the ingress boundary;
+the browser's `connect-src 'self'` CSP is the separate egress boundary below.
+
 The image copies the committed `public/` artifact directly. It does not run a
 Node or Vite build on the LXC. Resource isolation is provided by the target
 LXC's existing 2 vCPU and 4 GiB allocation, leaving the box's CPU and memory
