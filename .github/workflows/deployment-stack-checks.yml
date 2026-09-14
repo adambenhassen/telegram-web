@@ -95,6 +95,7 @@ jobs:
 
           jq -e '
             .name == "telegram-web-edge" and
+            .services.web.pids_limit == null and
             .networks.web.name == "telegram-web-edge-net" and
             .volumes.nginx_cache.name == "telegram-web-edge-nginx-cache"
           ' <<<"$edge_config"
