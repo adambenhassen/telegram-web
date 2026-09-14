@@ -1,9 +1,10 @@
 import {createHash, createPublicKey} from 'node:crypto';
-import {readFileSync} from 'node:fs';
+import {closeSync, constants, fstatSync, openSync, readSync} from 'node:fs';
 
 const PRIVATE_ENDPOINT = 'MTPROTO_PRIVATE_ENDPOINT';
 const PRIVATE_KEY_FILE = 'MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE';
 const PRIVATE_FIELDS = new Set([PRIVATE_ENDPOINT, PRIVATE_KEY_FILE]);
+const MAX_PUBLIC_KEY_FILE_BYTES = 16 * 1024;
 
 function decodeBase64Url(value) {
   return Buffer.from(value.replaceAll('-', '+').replaceAll('_', '/'), 'base64');
@@ -57,10 +58,35 @@ function normalizeEndpoint(value) {
 
 function readPublicKey(filePath) {
   let contents;
+  let descriptor;
   try {
-    contents = readFileSync(filePath, 'utf8');
-  } catch(cause) {
-    throw new Error(`Unable to read private MTProto public key file: ${filePath}`, {cause});
+    descriptor = openSync(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+    const stats = fstatSync(descriptor);
+    if(!stats.isFile() || stats.size > MAX_PUBLIC_KEY_FILE_BYTES) {
+      throw new Error('Invalid private MTProto public key file');
+    }
+
+    const buffer = Buffer.alloc(MAX_PUBLIC_KEY_FILE_BYTES + 1);
+    let length = 0;
+    while(length < buffer.length) {
+      const bytesRead = readSync(descriptor, buffer, length, buffer.length - length, null);
+      if(!bytesRead) {
+        break;
+      }
+      length += bytesRead;
+    }
+    if(length > MAX_PUBLIC_KEY_FILE_BYTES) {
+      throw new Error('Invalid private MTProto public key file');
+    }
+    contents = buffer.subarray(0, length).toString('utf8');
+  } catch{
+    throw new Error('Unable to read private MTProto public key file');
+  } finally {
+    if(descriptor !== undefined) {
+      try {
+        closeSync(descriptor);
+      } catch{}
+    }
   }
 
   if(/-----BEGIN [^-]*PRIVATE KEY-----/.test(contents)) {
@@ -75,6 +101,12 @@ function readPublicKey(filePath) {
     throw new Error('Private MTProto key file must contain exactly one public RSA key');
   }
 
+  const payload = match[2].replaceAll('\n', '');
+  const inputDer = Buffer.from(payload, 'base64');
+  if(inputDer.toString('base64') !== payload) {
+    throw new Error('Private MTProto key file must contain exactly one public RSA key');
+  }
+
   let key;
   try {
     key = createPublicKey(publicKey);
@@ -82,7 +114,6 @@ function readPublicKey(filePath) {
     throw new Error('Private MTProto key file must contain exactly one public RSA key', {cause});
   }
 
-  const inputDer = Buffer.from(match[2].replaceAll('\n', ''), 'base64');
   const keyType = match[1] === 'PUBLIC KEY' ? 'spki' : 'pkcs1';
   const canonicalDer = key.export({format: 'der', type: keyType});
   if(!inputDer.equals(canonicalDer)) {
@@ -105,7 +136,7 @@ function readPublicKey(filePath) {
   const serializedKey = Buffer.concat([serializeTlBytes(modulus), serializeTlBytes(exponent)]);
   const digest = createHash('sha1').update(serializedKey).digest();
   const fingerprint = Buffer.from(digest.subarray(-8)).reverse().toString('hex');
-  return {fingerprint, publicKey: `${publicKey}\n`};
+  return {fingerprint, publicKey: key.export({format: 'pem', type: keyType}).toString()};
 }
 
 export function resolveMtprotoTarget(env) {
