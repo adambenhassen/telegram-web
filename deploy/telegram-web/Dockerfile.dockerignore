@@ -1,0 +1,6 @@
+*
+!public/
+!public/**
+!deploy/
+!deploy/telegram-web/
+!deploy/telegram-web/**

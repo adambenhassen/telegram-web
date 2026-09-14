@@ -1,0 +1,104 @@
+name: Deployment Stack Checks
+
+on:
+  pull_request:
+    branches:
+      - master
+  push:
+    branches:
+      - master
+
+permissions:
+  contents: read
+
+jobs:
+  docker:
+    name: docker
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Build deployment image
+        run: docker build --pull --file deploy/telegram-web/Dockerfile --tag telegram-web:ci .
+
+      - name: Start image and verify served stack
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          container_name=telegram-web-ci
+          cleanup() {
+            docker rm -f "$container_name" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          docker run --detach \
+            --name "$container_name" \
+            telegram-web:ci
+          if ! docker exec "$container_name" nginx -t; then
+            docker logs "$container_name"
+            exit 1
+          fi
+
+          ready=0
+          for attempt in {1..30}; do
+            if docker exec "$container_name" wget --quiet --output-document=/dev/null http://127.0.0.1:8080/healthz; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [ "$ready" -ne 1 ]; then
+            docker logs "$container_name"
+            exit 1
+          fi
+
+          test "$(docker exec "$container_name" wget --quiet --output-document=- http://127.0.0.1:8080/healthz)" = "ok"
+
+          document="$(docker exec "$container_name" wget --quiet --output-document=- http://127.0.0.1:8080/)"
+          fallback="$(docker exec "$container_name" wget --quiet --output-document=- http://127.0.0.1:8080/ci-fallback-test-route)"
+          test "$document" = "$fallback"
+          grep --fixed-strings --quiet '<!DOCTYPE html>' <<<"$document"
+
+          document_headers="$(docker exec "$container_name" wget --quiet --server-response --output-document=/dev/null http://127.0.0.1:8080/ 2>&1)"
+          grep --fixed-strings --quiet 'Content-Security-Policy:' <<<"$document_headers"
+          grep --fixed-strings --quiet "connect-src 'self'" <<<"$document_headers"
+
+          worker_paths="$(find public -maxdepth 1 -type f -name 'index.worker-*.js' -printf '%f\n' | sort)"
+          test -n "$worker_paths"
+          while IFS= read -r worker_path; do
+            docker exec "$container_name" wget --quiet --output-document=/dev/null "http://127.0.0.1:8080/$worker_path"
+            worker_headers="$(docker exec "$container_name" wget --quiet --server-response --output-document=/dev/null "http://127.0.0.1:8080/$worker_path" 2>&1)"
+            grep --fixed-strings --quiet 'Content-Type: application/javascript' <<<"$worker_headers"
+            grep --fixed-strings --quiet 'Content-Security-Policy:' <<<"$worker_headers"
+            grep --fixed-strings --quiet "connect-src 'self'" <<<"$worker_headers"
+          done <<<"$worker_paths"
+
+  compose:
+    name: compose
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out code
+        uses: actions/checkout@v4
+
+      - name: Validate Compose project isolation
+        shell: bash
+        run: |
+          set -euo pipefail
+          edge_config="$(docker compose -f deploy/telegram-web/compose.yaml config --format json)"
+          root_config="$(docker compose -f docker-compose.yaml config --format json)"
+
+          jq -e '
+            .name == "telegram-web-edge" and
+            .networks.web.name == "telegram-web-edge-net" and
+            .volumes.nginx_cache.name == "telegram-web-edge-nginx-cache"
+          ' <<<"$edge_config"
+          jq -e '
+            .name == "telegram-web" and
+            .networks.default.name == "telegram-web_default"
+          ' <<<"$root_config"
