@@ -95,7 +95,6 @@ jobs:
 
           jq -e '
             .name == "telegram-web-edge" and
-            .services.web.pids_limit == null and
             (.services.web | has("mem_limit") | not) and
             (.services.web | has("cpus") | not) and
             (.services.web | has("pids_limit") | not) and
