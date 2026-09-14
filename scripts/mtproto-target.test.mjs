@@ -1,4 +1,4 @@
-import {generateKeyPairSync} from 'node:crypto';
+import {createPublicKey, generateKeyPairSync} from 'node:crypto';
 import {mkdtempSync, writeFileSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
@@ -29,6 +29,11 @@ function writeKey(contents) {
   const keyPath = join(directory, 'key.pem');
   writeFileSync(keyPath, contents);
   return keyPath;
+}
+
+function pem(label, der) {
+  const payload = der.toString('base64').match(/.{1,64}/g).join('\n');
+  return `-----BEGIN ${label}-----\n${payload}\n-----END ${label}-----\n`;
 }
 
 describe('MTProto build target', () => {
@@ -82,6 +87,18 @@ describe('MTProto build target', () => {
     const keyPath = writeKey(privateKey.export({type: 'pkcs8', format: 'pem'}));
     expect(() => resolveMtprotoTarget(privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: keyPath})))
     .toThrow(/private key material/i);
+  });
+
+  it.each(['public', 'private'])('rejects appended %s DER inside one public PEM block', (kind) => {
+    const firstKey = createPublicKey(fixtureKey).export({type: 'spki', format: 'der'});
+    const keyPair = generateKeyPairSync('rsa', {modulusLength: 2048});
+    const appendedKey = kind === 'public' ?
+      keyPair.publicKey.export({type: 'spki', format: 'der'}) :
+      keyPair.privateKey.export({type: 'pkcs8', format: 'der'});
+    const keyPath = writeKey(pem('PUBLIC KEY', Buffer.concat([firstKey, appendedKey])));
+
+    expect(() => resolveMtprotoTarget(privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: keyPath})))
+    .toThrow(/exactly one public RSA key/i);
   });
 
   it.each([

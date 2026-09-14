@@ -69,7 +69,7 @@ function readPublicKey(filePath) {
 
   const publicKey = contents.trim().replaceAll('\r\n', '\n');
   const match = publicKey.match(
-    /^-----BEGIN (PUBLIC KEY|RSA PUBLIC KEY)-----\n[A-Za-z0-9+/=\n]+\n-----END \1-----$/
+    /^-----BEGIN (PUBLIC KEY|RSA PUBLIC KEY)-----\n([A-Za-z0-9+/=\n]+)\n-----END \1-----$/
   );
   if(!match) {
     throw new Error('Private MTProto key file must contain exactly one public RSA key');
@@ -80,6 +80,13 @@ function readPublicKey(filePath) {
     key = createPublicKey(publicKey);
   } catch(cause) {
     throw new Error('Private MTProto key file must contain exactly one public RSA key', {cause});
+  }
+
+  const inputDer = Buffer.from(match[2].replaceAll('\n', ''), 'base64');
+  const keyType = match[1] === 'PUBLIC KEY' ? 'spki' : 'pkcs1';
+  const canonicalDer = key.export({format: 'der', type: keyType});
+  if(!inputDer.equals(canonicalDer)) {
+    throw new Error('Private MTProto key file must contain exactly one public RSA key');
   }
 
   const jwk = key.export({format: 'jwk'});
