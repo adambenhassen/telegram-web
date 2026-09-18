@@ -4,6 +4,7 @@ import {logger, LogTypes} from '@lib/logger';
 import MTTransport from '@lib/mtproto/transports/transport';
 import Modes from '@config/modes';
 import transportController from '@lib/mtproto/transports/controller';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
 // import networkStats from '@lib/mtproto/networkStats';
 
 const TEST_DROPPING_REQUESTS: TrueDcId = undefined;
@@ -28,6 +29,10 @@ export default class HTTP implements MTTransport {
     protected url: string,
     logSuffix: string
   ) {
+    if(isPrivateMtprotoTarget()) {
+      throw new Error('[MT] private MTProto target does not permit HTTP transport');
+    }
+
     this.debug = Modes.debug && false;
 
     let logTypes = LogTypes.Error | LogTypes.Log;
@@ -44,6 +49,10 @@ export default class HTTP implements MTTransport {
     mode?: RequestMode,
     timeoutMs = 30000
   ) {
+    if(isPrivateMtprotoTarget()) {
+      throw new Error('[MT] private MTProto target does not permit HTTP transport');
+    }
+
     this.debug && this.log.debug('-> body length to send:', body.length);
 
     const controller = new AbortController();

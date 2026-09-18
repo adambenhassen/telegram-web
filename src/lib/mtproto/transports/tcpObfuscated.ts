@@ -11,6 +11,7 @@ import transportController from '@lib/mtproto/transports/controller';
 import bytesToHex from '@helpers/bytes/bytesToHex';
 // import networkStats from '@lib/mtproto/networkStats';
 import ctx from '@environment/ctx';
+import {getMtprotoTarget} from '@config/mtprotoTarget';
 
 export default class TcpObfuscated implements MTTransport {
   private codec = abridgedPacketCodec;
@@ -44,6 +45,11 @@ export default class TcpObfuscated implements MTTransport {
     private logSuffix: string,
     private retryTimeout: number
   ) {
+    const target = getMtprotoTarget();
+    if(target.mode === 'private' && url !== target.endpoint) {
+      throw new Error('[MT] private MTProto target endpoint is immutable');
+    }
+
     let logTypes = LogTypes.Error | LogTypes.Log;
     if(this.debug) logTypes |= LogTypes.Debug;
     this.log = logger(`TCP-${dcId}` + logSuffix, logTypes);
@@ -243,6 +249,11 @@ export default class TcpObfuscated implements MTTransport {
   }
 
   public changeUrl(url: string) {
+    const target = getMtprotoTarget();
+    if(target.mode === 'private' && url !== target.endpoint) {
+      throw new Error('[MT] private MTProto target endpoint is immutable');
+    }
+
     if(this.url === url) {
       return;
     }

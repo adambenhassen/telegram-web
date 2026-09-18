@@ -237,13 +237,19 @@ describe('MTProto build target', () => {
   });
 
   it('normalizes and exposes one atomic private target', () => {
-    expect(resolveMtprotoTarget(privateEnv({
+    const target = resolveMtprotoTarget(privateEnv({
       MTPROTO_PRIVATE_ENDPOINT: 'WSS://PRIVATE.Example.Test.:2443/a/../apiws'
-    }))).toEqual({
+    }));
+    expect(target).toMatchObject({
       mode: 'private',
       endpoint: 'wss://private.example.test:2443/apiws',
       fingerprint: '289f8aeb5aa17de3',
       publicKey: fixtureKey
+    });
+    const jwk = createPublicKey(fixtureKey).export({format: 'jwk'});
+    expect(target.publicKeyHex).toEqual({
+      modulus: Buffer.from(jwk.n, 'base64url').toString('hex'),
+      exponent: Buffer.from(jwk.e, 'base64url').toString('hex')
     });
   });
 

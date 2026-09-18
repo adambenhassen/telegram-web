@@ -136,7 +136,14 @@ function readPublicKey(filePath) {
   const serializedKey = Buffer.concat([serializeTlBytes(modulus), serializeTlBytes(exponent)]);
   const digest = createHash('sha1').update(serializedKey).digest();
   const fingerprint = Buffer.from(digest.subarray(-8)).reverse().toString('hex');
-  return {fingerprint, publicKey: key.export({format: 'pem', type: keyType}).toString()};
+  return {
+    fingerprint,
+    publicKey: key.export({format: 'pem', type: keyType}).toString(),
+    publicKeyHex: {
+      modulus: modulus.toString('hex'),
+      exponent: exponent.toString('hex')
+    }
+  };
 }
 
 export function resolveMtprotoTarget(env) {
@@ -168,8 +175,8 @@ export function resolveMtprotoTarget(env) {
   }
 
   const endpoint = normalizeEndpoint(endpointValue.trim());
-  const {fingerprint, publicKey} = readPublicKey(keyFileValue.trim());
-  return {mode: 'private', endpoint, fingerprint, publicKey};
+  const {fingerprint, publicKey, publicKeyHex} = readPublicKey(keyFileValue.trim());
+  return {mode: 'private', endpoint, fingerprint, publicKey, publicKeyHex};
 }
 
 export function assertRunnableMtprotoTarget(target) {

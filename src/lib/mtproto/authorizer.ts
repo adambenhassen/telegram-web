@@ -27,6 +27,7 @@ import tsNow from '@helpers/tsNow';
 import {randomBytes} from '@helpers/random';
 import {MTAuthKey} from '@lib/mtproto/authKey';
 import safeAssign from '@helpers/object/safeAssign';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
 
 type AuthOptions = {
   dcId: number,
@@ -605,6 +606,11 @@ export class Authorizer {
   }
 
   private getTransportType = () => {
+    if(isPrivateMtprotoTarget()) {
+      this.transportType = 'websocket';
+      return;
+    }
+
     if(!import.meta.env.VITE_MTPROTO_AUTO || !Modes.multipleTransports) {
       return;
     }
