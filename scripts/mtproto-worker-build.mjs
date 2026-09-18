@@ -6,7 +6,7 @@ import solidPlugin from 'vite-plugin-solid';
 
 const ROOT = resolve('.');
 const ROUTE_PROBE_ID = '\0mtproto-route-probe';
-const SOCKET_STUB_ID = '\0mtproto-test-socket';
+const SOCKET_STUB_ID = resolve(ROOT, 'scripts/mtproto-test-socket.virtual.mjs');
 
 export const PRIVATE_WORKER_ENTRIES = [
   {context: 'dedicated-worker', entry: 'src/lib/mainWorker/index.worker.ts'},
@@ -20,6 +20,7 @@ const aliases = {
   '@helpers': resolve(ROOT, 'src/helpers'),
   '@hooks': resolve(ROOT, 'src/hooks'),
   '@stores': resolve(ROOT, 'src/stores'),
+  '@lib/mtproto/transports/websocket': SOCKET_STUB_ID,
   '@lib': resolve(ROOT, 'src/lib'),
   '@appManagers': resolve(ROOT, 'src/lib/appManagers'),
   '@richTextProcessor': resolve(ROOT, 'src/lib/richTextProcessor'),
@@ -39,9 +40,11 @@ const context = typeof ServiceWorkerGlobalScope !== 'undefined' && self instance
   'service-worker' : typeof SharedWorkerGlobalScope !== 'undefined' && self instanceof SharedWorkerGlobalScope ?
     'shared-worker' : 'dedicated-worker';
 globalThis.__mtprotoRoutes ??= [];
+globalThis.__mtprotoDials ??= [];
 for(const dcId of [1, 2, 3, 4, 5]) {
   for(const connectionType of ['client', 'upload', 'download']) {
     for(const premium of [false, true]) {
+      const dialStart = globalThis.__mtprotoDials.length;
       const transport = new DcConfigurator().chooseServer(dcId, connectionType, 'websocket', false, premium);
       globalThis.__mtprotoRoutes.push({
         context,
@@ -49,7 +52,8 @@ for(const dcId of [1, 2, 3, 4, 5]) {
         connectionType,
         premium,
         route: constructTelegramWebSocketUrl(dcId, connectionType, premium),
-        dial: transport.url
+        dial: transport.url,
+        dials: globalThis.__mtprotoDials.slice(dialStart)
       });
       transport.destroy();
     }
@@ -59,8 +63,10 @@ for(const dcId of [1, 2, 3, 4, 5]) {
 
 const socketStub = `
 export default class FakeSocket {
-  constructor() {
+  constructor(dcId, url, logSuffix) {
     this.listeners = new Map();
+    globalThis.__mtprotoDials ??= [];
+    globalThis.__mtprotoDials.push({dcId, url, logSuffix});
   }
 
   addEventListener(type, listener) {

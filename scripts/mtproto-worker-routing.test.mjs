@@ -44,7 +44,13 @@ describe('private MTProto worker routing', () => {
       expect(routes.every((route) =>
         route.context === context &&
         route.route === PRIVATE_ENDPOINT &&
-        route.dial === PRIVATE_ENDPOINT
+        route.dial === PRIVATE_ENDPOINT &&
+        Array.isArray(route.dials) &&
+        route.dials.length === 1 &&
+        route.dials.every((dial) =>
+          dial.dcId === route.dcId &&
+          dial.url === PRIVATE_ENDPOINT
+        )
       )).toBe(true);
       expect(output.bundle).toContain(PRIVATE_ENDPOINT);
     }
