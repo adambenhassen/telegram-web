@@ -7,7 +7,6 @@ import {
 import {validateMtprotoTarget} from '@config/mtprotoTarget';
 
 const PRIVATE_ENDPOINT = 'wss://private.example.test:2443/apiws';
-const WORKER_CONTEXTS = ['main', 'dedicated-worker', 'shared-worker', 'service-worker'] as const;
 const privateTarget = {
   mode: 'private' as const,
   endpoint: PRIVATE_ENDPOINT,
@@ -146,19 +145,16 @@ describe('private embedded target runtime routing', () => {
     [1, 2, 3, 4, 5].flatMap((dcId) =>
       (['client', 'upload', 'download'] as const).flatMap((connectionType) =>
         [false, true].flatMap((premium) =>
-          WORKER_CONTEXTS.map((context) =>
-            [dcId, connectionType, premium, context] as const
-          )
+          [[dcId, connectionType, premium] as const]
         )
       )
     )
-  )('uses the embedded WSS endpoint from %s in %s (%s, premium=%s)', (dcId, connectionType, premium, workerContext) => {
+  )('uses the embedded WSS endpoint for %s in %s (premium=%s)', (dcId, connectionType, premium) => {
     const configurator = new privateDcConfigurator.DcConfigurator();
     const transport = configurator.chooseServer(dcId, connectionType, 'websocket', false, premium);
     const transportUrl = (transport as unknown as {url: string}).url;
 
-    expect({workerContext, route: privateDcConfigurator.constructTelegramWebSocketUrl(dcId, connectionType, premium), transport: transportUrl}).toEqual({
-      workerContext,
+    expect({route: privateDcConfigurator.constructTelegramWebSocketUrl(dcId, connectionType, premium), transport: transportUrl}).toEqual({
       route: PRIVATE_ENDPOINT,
       transport: PRIVATE_ENDPOINT
     });
