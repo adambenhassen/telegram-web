@@ -62,4 +62,8 @@ if(Modes.http) {
   Modes.transport = 'https';
 }
 
+export function shouldRewriteAuthTestMode(requestedTestMode: boolean) {
+  return !PRIVATE_TARGET && requestedTestMode !== Modes.test;
+}
+
 export default Modes;

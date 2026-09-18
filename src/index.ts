@@ -31,7 +31,7 @@ import overlayCounter from '@helpers/overlayCounter';
 import {getAppWindow, onAppWindowChange} from '@helpers/appWindow';
 import singleInstance, {InstanceDeactivateReason} from '@lib/singleInstance';
 import {parseUriParamsLine} from '@helpers/string/parseUriParams';
-import Modes from '@config/modes';
+import Modes, {shouldRewriteAuthTestMode} from '@config/modes';
 import {AuthState} from '@types';
 import DEBUG, {IS_BETA, IS_POPUP_SANDBOX} from '@config/debug';
 import IS_INSTALL_PROMPT_SUPPORTED from '@environment/installPrompt';
@@ -584,7 +584,7 @@ if(import.meta.env.DEV) {
       tgAddr: params.tgaddr
     };
 
-    if(data.isTest !== Modes.test) {
+    if(shouldRewriteAuthTestMode(data.isTest)) {
       const url = new URL(location.href);
       if(+params.tgWebAuthTest) {
         url.searchParams.set('test', '1');

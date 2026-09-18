@@ -27,7 +27,6 @@ export type MtprotoRoute = {
   transportType: 'websocket',
   endpoint: string
 };
-export type MtprotoWorkerContext = 'main' | 'dedicated-worker' | 'shared-worker' | 'service-worker';
 type Servers = {
   [transportType in TransportType]: {
     [connectionType in ConnectionType]: {
@@ -63,19 +62,14 @@ export function resolveMtprotoRoute({
   dcId,
   connectionType,
   transportType,
-  fallbackTransportType,
-  migrationDcId,
-  workerContext
+  migrationDcId
 }: {
   target: MtprotoTarget,
   dcId: DcId,
   connectionType: ConnectionType,
   transportType: TransportType,
   premium?: boolean,
-  testMode?: boolean,
-  fallbackTransportType?: TransportType,
-  migrationDcId?: DcId,
-  workerContext?: MtprotoWorkerContext
+  migrationDcId?: DcId
 }): MtprotoRoute {
   const validTarget = validateMtprotoTarget(target);
   const validDcId = assertValidDcId(dcId);
@@ -86,11 +80,8 @@ export function resolveMtprotoRoute({
   if(validTarget.mode !== 'private') {
     throw new Error('[MT] private route requested for a Telegram target');
   }
-  if(transportType !== 'websocket' || (fallbackTransportType && fallbackTransportType !== 'websocket')) {
+  if(transportType !== 'websocket') {
     throw new Error('[MT] private MTProto target only permits websocket transport');
-  }
-  if(workerContext && !['main', 'dedicated-worker', 'shared-worker', 'service-worker'].includes(workerContext)) {
-    throw new Error('[MT] invalid MTProto worker context: ' + workerContext);
   }
 
   return {
