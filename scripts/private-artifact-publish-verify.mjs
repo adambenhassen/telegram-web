@@ -1,4 +1,4 @@
-import {createHash} from 'node:crypto';
+import {createHash, createPublicKey} from 'node:crypto';
 import {
   existsSync,
   readdirSync,
@@ -7,7 +7,6 @@ import {
 } from 'node:fs';
 import {relative, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {resolveMtprotoTarget} from './mtproto-target.mjs';
 
 const MANIFEST = 'mtproto-target.json';
 const SNAPSHOT = 'snapshot.json';
@@ -65,6 +64,61 @@ function readJson(path, label) {
 
 function sha256File(path) {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
+}
+
+function decodeBase64Url(value) {
+  return Buffer.from(value.replaceAll('-', '+').replaceAll('_', '/'), 'base64');
+}
+
+function serializeTlBytes(bytes) {
+  const length = bytes.length;
+  const header = length < 254
+    ? Buffer.from([length])
+    : Buffer.from([254, length & 0xff, length >> 8 & 0xff, length >> 16 & 0xff]);
+  const padding = Buffer.alloc((4 - (header.length + length) % 4) % 4);
+  return Buffer.concat([header, bytes, padding]);
+}
+
+function normalizeEndpoint(value) {
+  if(typeof value !== 'string' || !/^wss:\/\/[^/]/i.test(value)) {
+    fail('target endpoint is not normalized');
+  }
+  let endpoint;
+  try {
+    endpoint = new URL(value);
+  } catch{
+    fail('target endpoint is not normalized');
+  }
+  const hostname = endpoint.hostname.toLowerCase().replace(/\.+$/, '');
+  endpoint.hostname = hostname;
+  if(endpoint.protocol !== 'wss:' || !hostname || endpoint.username || endpoint.password ||
+    endpoint.search || endpoint.hash || hostname === 'telegram.org' || hostname.endsWith('.telegram.org') ||
+    endpoint.href !== value) {
+    fail('target endpoint is not normalized');
+  }
+  return endpoint.href;
+}
+
+function keyFingerprint(path) {
+  let key;
+  try {
+    key = createPublicKey(readFileSync(path, 'utf8'));
+  } catch(cause) {
+    throw new Error('[MT] private artifact publisher target public key is invalid', {cause});
+  }
+  const jwk = key.export({format: 'jwk'});
+  if(key.asymmetricKeyType !== 'rsa' || !jwk.n || !jwk.e) {
+    fail('target public key is not RSA');
+  }
+  const modulus = decodeBase64Url(jwk.n);
+  const exponent = decodeBase64Url(jwk.e);
+  const exponentValue = exponent.reduce((value, byte) => value * 256 + byte, 0);
+  const modulusBits = modulus.length * 8 - Math.clz32(modulus[0]) + 24;
+  if(modulusBits !== 2048 || exponentValue !== 65537) {
+    fail('target public key must be a 2048-bit RSA key with exponent 65537');
+  }
+  const serializedKey = Buffer.concat([serializeTlBytes(modulus), serializeTlBytes(exponent)]);
+  return createHash('sha1').update(serializedKey).digest().subarray(-8).reverse().toString('hex');
 }
 
 function artifactFiles(directory) {
@@ -161,11 +215,11 @@ export function verifyPublishedArtifact({directory, snapshotDirectory, sourceRef
   if(sha256File(keyPath) !== reviewed.publicKeySha256) {
     fail('target public-key digest does not match the attestation');
   }
-  const target = resolveMtprotoTarget({
-    MTPROTO_TARGET_MODE: reviewed.MTPROTO_TARGET_MODE,
-    MTPROTO_PRIVATE_ENDPOINT: reviewed.MTPROTO_PRIVATE_ENDPOINT,
-    MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: keyPath
-  });
+  const target = {
+    mode: reviewed.MTPROTO_TARGET_MODE,
+    endpoint: normalizeEndpoint(reviewed.MTPROTO_PRIVATE_ENDPOINT),
+    fingerprint: keyFingerprint(keyPath)
+  };
   if(target.endpoint !== reviewed.MTPROTO_PRIVATE_ENDPOINT || target.fingerprint !== reviewed.fingerprint) {
     fail('target attestation does not match the validated key');
   }

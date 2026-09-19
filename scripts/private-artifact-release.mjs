@@ -270,11 +270,6 @@ export function snapshotReviewedPrivateTarget({
     'scripts/private-artifact-publish-verify.mjs'
   );
   writeFileSync(resolve(outputDirectory, 'publisher-verify.mjs'), publisherVerifier);
-  writeFileSync(resolve(outputDirectory, 'mtproto-target.mjs'), gitFile(
-    rootDirectory,
-    reviewedWorkflowCommit,
-    'scripts/mtproto-target.mjs'
-  ));
   writeFileSync(resolve(outputDirectory, 'snapshot.json'), JSON.stringify({
     sourceRef,
     sourceCommit,

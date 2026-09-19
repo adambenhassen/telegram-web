@@ -114,10 +114,6 @@ jobs:
       contents: read
     outputs:
       artifact_digest_hex: ${{ steps.verify.outputs.artifact_digest_hex }}
-    env:
-      MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
-      MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
-      MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
 
     steps:
       - name: Check out the allowlisted target commit
@@ -134,6 +130,10 @@ jobs:
           path: ${{ runner.temp }}/private-target-snapshot
 
       - name: Validate the immutable target before installation
+        env:
+          MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
         run: node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Set up pnpm
@@ -151,6 +151,10 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Revalidate the immutable target after installation
+        env:
+          MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
         run: node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Run private negative-input and route-matrix tests
@@ -164,13 +168,25 @@ jobs:
           src/tests/superMessagePort.test.ts
 
       - name: Build reviewed private artifact
+        env:
+          MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
         run: pnpm exec vite build --outDir dist-private
 
       - name: Audit bundle routes, keys, and digest
+        env:
+          MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
         run: pnpm run check-bundle -- dist-private
 
       - name: Verify CSP, manifest, digest, and source commit
         id: verify
+        env:
+          MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
         run: >-
           pnpm run verify-private-artifact --
           --dist dist-private
