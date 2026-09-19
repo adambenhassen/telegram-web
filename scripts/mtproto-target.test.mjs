@@ -14,7 +14,7 @@ import {join, resolve} from 'node:path';
 import {inspect} from 'node:util';
 import {afterAll, describe, expect, it, vi} from 'vitest';
 import * as mtprotoTarget from './mtproto-target.mjs';
-import {auditPrivateArtifact} from './private-artifact.mjs';
+import {auditPrivateArtifact, writePrivateArtifactManifest} from './private-artifact.mjs';
 import {createPrivateWorkerBlobURL} from '../src/helpers/createPrivateWorkerBlobURL';
 const {assertRunnableMtprotoTarget, resolveMtprotoTarget} = mtprotoTarget;
 
@@ -414,14 +414,19 @@ describe('MTProto build target', () => {
   }, 60_000);
 
   it('fails private artifact verification after a completed artifact is changed', () => {
-    const {outputDirectory, result} = buildPrivateTarget();
-    expect(result.status).toBe(0);
+    const target = resolveMtprotoTarget(privateEnv());
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), [
+      'const endpoint = ' + JSON.stringify(target.endpoint) + ';',
+      'const fingerprint = ' + JSON.stringify(target.fingerprint) + ';'
+    ].join('\n'));
+    writePrivateArtifactManifest(outputDirectory, target, process.cwd());
 
     const executable = readdirSync(outputDirectory).find((file) => file.endsWith('.js'));
     expect(executable).toBeTruthy();
     writeFileSync(join(outputDirectory, executable), readFileSync(join(outputDirectory, executable)) + '\n// tampered');
     expect(() => mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toThrow(/digest/i);
-  }, 60_000);
+  });
 
   it('does not rewrite existing output when private validation fails', () => {
     const keyPath = writeKey('not a key');
