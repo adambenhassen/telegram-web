@@ -6,9 +6,12 @@
  */
 
 import type {TransportType} from '@lib/mtproto/dcConfigurator';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
+
+const PRIVATE_TARGET = isPrivateMtprotoTarget();
 
 const Modes = {
-  test: location.search.indexOf('test=1') > 0/*  || true */,
+  test: !PRIVATE_TARGET && location.search.indexOf('test=1') > 0/*  || true */,
   debug: location.search.indexOf('debug=1') > 0,
   // Preview-only QA override: exercise the non-contact link gate even when
   // the server does not expose report_spam / block_contact for the peer.
@@ -39,12 +42,12 @@ const Modes = {
   // Triggers: ?noWorker=1 in the URL, or VITE_NO_WORKER injected at build time
   // by `bash scripts/start-preview.sh --no-worker`.
   noWorker: location.search.indexOf('noWorker=1') > 0 || !!import.meta.env.VITE_NO_WORKER,
-  multipleTransports: !!(import.meta.env.VITE_MTPROTO_AUTO && import.meta.env.VITE_MTPROTO_HAS_HTTP && import.meta.env.VITE_MTPROTO_HAS_WS) && location.search.indexOf('noMultipleTransports=1') === -1,
+  multipleTransports: !PRIVATE_TARGET && !!(import.meta.env.VITE_MTPROTO_AUTO && import.meta.env.VITE_MTPROTO_HAS_HTTP && import.meta.env.VITE_MTPROTO_HAS_WS) && location.search.indexOf('noMultipleTransports=1') === -1,
   noPfs: true || location.search.indexOf('noPfs=1') > 0
 };
 
 if(import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-  const httpOnly = Modes.http = location.search.indexOf('http=1') > 0;
+  const httpOnly = !PRIVATE_TARGET && (Modes.http = location.search.indexOf('http=1') > 0);
   if(httpOnly) {
     Modes.multipleTransports = false;
   }
@@ -57,6 +60,10 @@ if(Modes.multipleTransports) {
 
 if(Modes.http) {
   Modes.transport = 'https';
+}
+
+export function shouldRewriteAuthTestMode(requestedTestMode: boolean) {
+  return !PRIVATE_TARGET && requestedTestMode !== Modes.test;
 }
 
 export default Modes;

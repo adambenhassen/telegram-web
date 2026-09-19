@@ -11,6 +11,7 @@ import Modes from '@config/modes';
 import bytesFromHex from '@helpers/bytes/bytesFromHex';
 import bytesToHex from '@helpers/bytes/bytesToHex';
 import bigInt from 'big-integer';
+import {getMtprotoTarget} from '@config/mtprotoTarget';
 
 export type RSAPublicKeyHex = {
   modulus: string,
@@ -76,11 +77,14 @@ export class RSAKeysManager {
   private publicKeysParsed: {
     [hex: string]: RSAPublicKeyHex
   } = {};
+  private target = getMtprotoTarget();
   private prepared = false;
   private preparePromise: Promise<void> = null;
 
   constructor() {
-    if(Modes.test) {
+    if(this.target.mode === 'private') {
+      this.publisKeysHex = [this.target.publicKeyHex];
+    } else if(Modes.test) {
       this.publisKeysHex = this.testPublicKeysHex;
     }
   }
@@ -123,6 +127,10 @@ export class RSAKeysManager {
 
       if(fingerprintHex.length < 16) {
         fingerprintHex = new Array(16 - fingerprintHex.length).fill('0').join('') + fingerprintHex;
+      }
+
+      if(this.target.mode === 'private' && fingerprintHex !== this.target.fingerprint) {
+        continue;
       }
 
       // console.log(fingerprintHex, this.publicKeysParsed);

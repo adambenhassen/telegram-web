@@ -6,6 +6,7 @@ import {TransportType, DcConfigurator} from '@lib/mtproto/dcConfigurator';
 import type HTTP from '@lib/mtproto/transports/http';
 import type TcpObfuscated from '@lib/mtproto/transports/tcpObfuscated';
 import MTTransport from '@lib/mtproto/transports/transport';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
 
 export class MTTransportController extends EventListenerBase<{
   change: (opened: MTTransportController['opened']) => void,
@@ -36,6 +37,10 @@ export class MTTransportController extends EventListenerBase<{
   }
 
   public async pingTransports() {
+    if(isPrivateMtprotoTarget()) {
+      return {https: false, websocket: true};
+    }
+
     const dcConfigurator = this.dcConfigurator ??= new DcConfigurator();
     const timeout = 2000;
     const transports: {[k in TransportType]?: MTTransport} = this.transports = {
@@ -82,6 +87,10 @@ export class MTTransportController extends EventListenerBase<{
   }
 
   public async waitForWebSocket() {
+    if(isPrivateMtprotoTarget()) {
+      return;
+    }
+
     if(this.pinging) return;
     this.pinging = true;
 
@@ -102,6 +111,10 @@ export class MTTransportController extends EventListenerBase<{
   }
 
   public setTransportValue(type: TransportType, value: boolean) {
+    if(isPrivateMtprotoTarget() && type !== 'websocket') {
+      throw new Error('[MT] private MTProto target only permits websocket transport');
+    }
+
     let length = this.opened.get(type) || 0;
     length += value ? 1 : -1;
 

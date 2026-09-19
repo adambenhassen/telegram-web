@@ -16,9 +16,17 @@ import {IS_WEB_WORKER} from '@helpers/context';
 import {DcId} from '@types';
 import {getEnvironment} from '@environment/utils';
 import SocketProxied from '@lib/mtproto/transports/socketProxied';
+import {getMtprotoTarget, isPrivateMtprotoTarget, validateMtprotoTarget} from '@config/mtprotoTarget';
+import type {MtprotoTarget} from '@config/mtprotoTarget';
 
 export type TransportType = 'websocket' | 'https' | 'http';
 export type ConnectionType = 'client' | 'download' | 'upload';
+export type MtprotoRoute = {
+  dcId: DcId,
+  connectionType: ConnectionType,
+  transportType: 'websocket',
+  endpoint: string
+};
 type Servers = {
   [transportType in TransportType]: {
     [connectionType in ConnectionType]: {
@@ -42,19 +50,65 @@ export function getTelegramConnectionSuffix(connectionType: ConnectionType) {
 // five DCs, so validate here, before the value can reach a URL or a storage key.
 export function assertValidDcId(dcId: DcId): DcId {
   const id = +dcId;
-  if(!Number.isInteger(id) || id < 1 || id > 5) {
+  if(typeof dcId !== 'number' || !Number.isInteger(id) || id < 1 || id > 5) {
     throw new Error('[MT] invalid dcId: ' + dcId);
   }
 
   return id as DcId;
 }
 
+export function resolveMtprotoRoute({
+  target,
+  dcId,
+  connectionType,
+  transportType,
+  migrationDcId
+}: {
+  target: MtprotoTarget,
+  dcId: DcId,
+  connectionType: ConnectionType,
+  transportType: TransportType,
+  premium?: boolean,
+  migrationDcId?: DcId
+}): MtprotoRoute {
+  const validTarget = validateMtprotoTarget(target);
+  const validDcId = assertValidDcId(dcId);
+  const routeDcId = migrationDcId === undefined ? validDcId : assertValidDcId(migrationDcId);
+  if(!['client', 'download', 'upload'].includes(connectionType)) {
+    throw new Error('[MT] invalid connection type: ' + connectionType);
+  }
+  if(validTarget.mode !== 'private') {
+    throw new Error('[MT] private route requested for a Telegram target');
+  }
+  if(transportType !== 'websocket') {
+    throw new Error('[MT] private MTProto target only permits websocket transport');
+  }
+
+  return {
+    dcId: routeDcId,
+    connectionType,
+    transportType,
+    endpoint: validTarget.endpoint
+  };
+}
+
 export function constructTelegramWebSocketUrl(_dcId: DcId, connectionType: ConnectionType, premium?: boolean) {
+  const dcId = assertValidDcId(_dcId);
+
+  if(isPrivateMtprotoTarget()) {
+    return resolveMtprotoRoute({
+      target: getMtprotoTarget(),
+      dcId,
+      connectionType,
+      transportType: 'websocket',
+      premium
+    }).endpoint;
+  }
+
   if(!import.meta.env.VITE_MTPROTO_HAS_WS) {
     return;
   }
 
-  const dcId = assertValidDcId(_dcId);
   const suffix = getTelegramConnectionSuffix(connectionType);
   const path = connectionType !== 'client' ? 'apiws' + TEST_SUFFIX + (premium ? PREMIUM_SUFFIX : '') : ('apiws' + TEST_SUFFIX);
   const chosenServer = `wss://${App.suffix.toLowerCase()}ws${dcId}${suffix}.web.telegram.org/${path}`;
@@ -82,6 +136,9 @@ export class DcConfigurator {
   public chosenServers: Servers = {} as any;
 
   private transportSocket = (dcId: DcId, connectionType: ConnectionType, premium?: boolean) => {
+    if(isPrivateMtprotoTarget() && !import.meta.env.VITE_MTPROTO_HAS_WS) {
+      throw new Error('[MT] private MTProto target requires WebSocket support');
+    }
     if(!import.meta.env.VITE_MTPROTO_HAS_WS) {
       return;
     }
@@ -102,6 +159,9 @@ export class DcConfigurator {
   };
 
   private transportHTTP = (dcId: DcId, connectionType: ConnectionType, premium?: boolean) => {
+    if(isPrivateMtprotoTarget()) {
+      throw new Error('[MT] private MTProto target does not permit HTTP transport');
+    }
     if(!import.meta.env.VITE_MTPROTO_HAS_HTTP) {
       return;
     }
@@ -138,6 +198,10 @@ export class DcConfigurator {
 
     dcId = assertValidDcId(dcId);
 
+    if(isPrivateMtprotoTarget() && transportType !== 'websocket') {
+      throw new Error('[MT] private MTProto target only permits websocket transport');
+    }
+
     if(!this.chosenServers.hasOwnProperty(transportType)) {
       this.chosenServers[transportType] = {
         client: {},
@@ -157,7 +221,9 @@ export class DcConfigurator {
     if(!transports.length || !reuse/*  || (upload && transports.length < 1) */) {
       let transport: MTTransport;
 
-      if(import.meta.env.VITE_MTPROTO_HAS_WS && import.meta.env.VITE_MTPROTO_HAS_HTTP) {
+      if(isPrivateMtprotoTarget()) {
+        transport = this.transportSocket(dcId, connectionType, premium);
+      } else if(import.meta.env.VITE_MTPROTO_HAS_WS && import.meta.env.VITE_MTPROTO_HAS_HTTP) {
         transport = (transportType === 'websocket' ? this.transportSocket : this.transportHTTP)(dcId, connectionType, premium);
       } else if(!import.meta.env.VITE_MTPROTO_HTTP) {
         transport = this.transportSocket(dcId, connectionType, premium);

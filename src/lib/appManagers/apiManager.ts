@@ -11,7 +11,7 @@ import type {MethodDeclMap} from '@layer';
 import type TcpObfuscated from '@lib/mtproto/transports/tcpObfuscated';
 import sessionStorage from '@lib/sessionStorage';
 import MTPNetworker, {MTMessage} from '@lib/mtproto/networker';
-import {ConnectionType, constructTelegramWebSocketUrl, DcConfigurator, TransportType} from '@lib/mtproto/dcConfigurator';
+import {assertValidDcId, ConnectionType, constructTelegramWebSocketUrl, DcConfigurator, TransportType} from '@lib/mtproto/dcConfigurator';
 import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
 import App from '@config/app';
 import {MOUNT_CLASS_TO} from '@config/debug';
@@ -40,6 +40,7 @@ import {getCommonDatabaseState} from '@config/databases/state';
 import {saveEncryptionKeyForHandoff} from '@lib/passcode/keyHandoff';
 import DeferredIsUsingPasscode from '@lib/passcode/deferredIsUsingPasscode';
 import {MTAuthKey} from '@lib/mtproto/authKey';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
 /**
  * To not be used in an ApiManager instance as there is no account number attached to it
  */
@@ -86,7 +87,7 @@ export class ApiManager extends ApiManagerMethods {
     this.baseDcId = 0;
     this.afterMessageTempIds = {};
 
-    this.transportType = Modes.transport;
+    this.transportType = isPrivateMtprotoTarget() ? 'websocket' : Modes.transport;
 
     // * Make sure that the used autologin_token is no more than 10000 seconds old
     // * https://core.telegram.org/api/url-authorization
@@ -141,6 +142,10 @@ export class ApiManager extends ApiManagerMethods {
   }
 
   private getTransportType(connectionType: ConnectionType) {
+    if(isPrivateMtprotoTarget()) {
+      return 'websocket';
+    }
+
     let transportType: TransportType;
     if(import.meta.env.VITE_MTPROTO_HTTP_UPLOAD) {
       transportType = connectionType === 'upload' && getEnvironment().IS_SAFARI ? 'https' : 'websocket';
@@ -202,6 +207,10 @@ export class ApiManager extends ApiManagerMethods {
   }
 
   public changeTransportType(transportType: TransportType) {
+    if(isPrivateMtprotoTarget() && transportType !== 'websocket') {
+      throw new Error('[MT] private MTProto target only permits websocket transport');
+    }
+
     const oldTransportType = this.transportType;
     if(oldTransportType === transportType) {
       return;
@@ -239,7 +248,7 @@ export class ApiManager extends ApiManagerMethods {
     }
 
     const accountData = await AccountController.get(this.getAccountNumber());
-    const baseDcId = accountData.dcId;
+    const baseDcId = accountData.dcId ? assertValidDcId(accountData.dcId) : undefined;
     if(!this.baseDcId) {
       if(!baseDcId) {
         this.setBaseDcId(App.baseDcId);
@@ -261,6 +270,8 @@ export class ApiManager extends ApiManagerMethods {
     if(!userAuth.dcID) {
       const baseDcId = await this.getBaseDcId();
       userAuth.dcID = baseDcId;
+    } else {
+      userAuth.dcID = assertValidDcId(+userAuth.dcID);
     }
 
     AccountController.update(this.getAccountNumber(), {
@@ -271,6 +282,7 @@ export class ApiManager extends ApiManagerMethods {
   }
 
   public setBaseDcId(dcId: DcId) {
+    dcId = assertValidDcId(dcId);
     const wasDcId = this.baseDcId;
     if(wasDcId && wasDcId === dcId) {
       return;
@@ -393,6 +405,7 @@ export class ApiManager extends ApiManagerMethods {
   }
 
   public getNetworker(dcId: DcId, options: InvokeApiOptions = {}): Promise<MTPNetworker> {
+    dcId = assertValidDcId(dcId);
     const connectionType: ConnectionType = options.fileDownload ? 'download' : (options.fileUpload ? 'upload' : 'client');
     // const connectionType: ConnectionType = 'client';
 
@@ -720,7 +733,11 @@ export class ApiManager extends ApiManagerMethods {
 
           return this.cachedExportPromise[dcId].then(() => performRequest());
         } else if(error.code === 303) {
-          const newDcId = +error.type.match(/^(PHONE_MIGRATE_|NETWORK_MIGRATE_|USER_MIGRATE_|STATS_MIGRATE_)(\d+)/)[2] as DcId;
+          const match = error.type?.match(/^(PHONE_MIGRATE_|NETWORK_MIGRATE_|USER_MIGRATE_|STATS_MIGRATE_)(\d+)/);
+          if(!match) {
+            throw error;
+          }
+          const newDcId = assertValidDcId(+match[2]);
           if(newDcId !== dcId) {
             if(options.dcId) {
               options.dcId = newDcId;
@@ -731,7 +748,11 @@ export class ApiManager extends ApiManagerMethods {
             return this.invokeApi(method, params, options);
           }
         } else if(error.code === 400 && error.type.indexOf('FILE_MIGRATE') === 0) {
-          const newDcId = +error.type.match(/^(FILE_MIGRATE_)(\d+)/)[2] as DcId;
+          const match = error.type.match(/^(FILE_MIGRATE_)(\d+)/);
+          if(!match) {
+            throw error;
+          }
+          const newDcId = assertValidDcId(+match[2]);
           if(newDcId !== dcId) {
             options.dcId = newDcId;
             return this.invokeApi(method, params, options);

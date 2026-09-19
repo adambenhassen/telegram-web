@@ -143,6 +143,9 @@ if(USE_OWN_SOLID) {
 }
 
 export default defineConfig({
+  define: {
+    __MTPROTO_TARGET__: JSON.stringify(mtprotoTarget)
+  },
   plugins: [
     // devtools({
     //   /* features options - all disabled by default */
