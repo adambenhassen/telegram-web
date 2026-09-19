@@ -8,7 +8,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import {relative, resolve, sep} from 'node:path';
-import {JSDOM} from 'jsdom';
+import {readHeadContentSecurityPolicies} from './private-artifact-csp.mjs';
 
 export const PRIVATE_ARTIFACT_MANIFEST = 'mtproto-target.json';
 
@@ -165,11 +165,7 @@ export function verifyPrivateArtifactCsp(directory, endpoint) {
   }
 
   const expectedPolicy = privateContentSecurityPolicy(endpoint);
-  const document = new JSDOM(readFileSync(indexPath, 'utf8')).window.document;
-  const policies = [...document.head.querySelectorAll('meta')]
-  .filter((meta) => meta.getAttribute('http-equiv')?.trim().toLowerCase() === 'content-security-policy')
-  .map((meta) => meta.getAttribute('content'))
-  .filter((policy) => policy !== null);
+  const policies = readHeadContentSecurityPolicies(readFileSync(indexPath, 'utf8'));
   if(!policies.includes(expectedPolicy)) {
     invalidArtifact('index document CSP does not match the configured endpoint');
   }

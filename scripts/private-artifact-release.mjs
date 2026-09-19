@@ -270,6 +270,12 @@ export function snapshotReviewedPrivateTarget({
     'scripts/private-artifact-publish-verify.mjs'
   );
   writeFileSync(resolve(outputDirectory, 'publisher-verify.mjs'), publisherVerifier);
+  const publisherCspParser = gitFile(
+    rootDirectory,
+    reviewedWorkflowCommit,
+    'scripts/private-artifact-csp.mjs'
+  );
+  writeFileSync(resolve(outputDirectory, 'private-artifact-csp.mjs'), publisherCspParser);
   writeFileSync(resolve(outputDirectory, 'snapshot.json'), JSON.stringify({
     sourceRef,
     sourceCommit,
@@ -479,6 +485,14 @@ function option(args, name, fallback) {
   return value;
 }
 
+function optionalOption(args, name, fallback) {
+  const index = args.indexOf(name);
+  if(index === -1) return fallback;
+  const value = args[index + 1];
+  if(value === undefined || value.startsWith('--')) fail(`${name} requires a value`);
+  return value;
+}
+
 function preparePublication(args) {
   const eventName = option(args, '--event', process.env.PRIVATE_ARTIFACT_EVENT || process.env.GITHUB_EVENT_NAME);
   const headBranch = option(args, '--head-branch', process.env.PRIVATE_ARTIFACT_HEAD_BRANCH);
@@ -487,7 +501,7 @@ function preparePublication(args) {
   assertTrustedWorkflowRun({eventName, headBranch, conclusion, workflowName});
 
   const requestPath = option(args, '--request', '');
-  const requestedTargetRef = option(args, '--target-ref', process.env.PRIVATE_ARTIFACT_TARGET_REF);
+  const requestedTargetRef = optionalOption(args, '--target-ref', process.env.PRIVATE_ARTIFACT_TARGET_REF);
   const targetRef = requestedTargetRef || loadPublicationRequest(requestPath).targetRef;
   const workflowCommit = option(
     args,

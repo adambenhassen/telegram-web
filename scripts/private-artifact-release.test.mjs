@@ -9,6 +9,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {afterAll, describe, expect, it} from 'vitest';
 import {
+  REQUEST_WORKFLOW_NAME,
   assertPublicationRef,
   assertReviewedEnvironment,
   assertTrustedWorkflowRun,
@@ -38,11 +39,11 @@ afterAll(() => {
   }
 });
 
-function temporaryArtifact() {
+function temporaryArtifact(indexDocument) {
   const directory = mkdtempSync(join(tmpdir(), 'private-artifact-release-'));
   temporaryDirectories.push(directory);
   const {target} = loadReviewedPrivateTarget();
-  writeFileSync(join(directory, 'index.html'), [
+  writeFileSync(join(directory, 'index.html'), indexDocument || [
     '<!doctype html><html><head>',
     `<meta http-equiv="Content-Security-Policy" content="${privateContentSecurityPolicy(target.endpoint)}">`,
     '</head><body></body></html>'
@@ -130,6 +131,39 @@ describe('private artifact publication attestation', () => {
     expect(() => loadPublicationRequest(requestPath)).toThrow(/fields/i);
   });
 
+  it('loads a data-only request when workflow_run passes an empty target ref', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-prepare-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    const outputDirectory = join(directory, 'snapshot');
+    const outputPath = join(directory, 'github-output');
+    const commit = currentCommit();
+    writeFileSync(requestPath, JSON.stringify({targetRef: 'refs/heads/master'}));
+
+    execFileSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'prepare',
+      '--event', 'workflow_run',
+      '--head-branch', 'master',
+      '--conclusion', 'success',
+      '--workflow-name', REQUEST_WORKFLOW_NAME,
+      '--request', requestPath,
+      '--target-ref', '',
+      '--workflow-commit', commit,
+      '--output', outputDirectory
+    ], {
+      cwd: repositoryRoot,
+      env: {...process.env, GITHUB_OUTPUT: outputPath},
+      encoding: 'utf8'
+    });
+
+    expect(JSON.parse(readFileSync(join(outputDirectory, 'snapshot.json'), 'utf8'))).toMatchObject({
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit
+    });
+    expect(readFileSync(outputPath, 'utf8')).toContain('source_ref=refs/heads/master');
+  });
+
   it('rejects an unreviewed ref before it can verify or publish an artifact', () => {
     const directory = temporaryArtifact();
     const commit = currentCommit();
@@ -154,6 +188,34 @@ describe('private artifact publication attestation', () => {
 
     expect(() => verifyPrivateArtifactCsp(directory, endpoint))
     .toThrow(/CSP does not match/i);
+  });
+
+  it.each([
+    ['an HTML comment', '<!doctype html><html><head><!-- CSP_MARKER --></head><body></body></html>'],
+    ['the document body', '<!doctype html><html><head></head><body>CSP_MARKER</body></html>']
+  ])('publisher rejects a CSP marker in %s instead of a real head meta element', (_name, document) => {
+    const {target} = loadReviewedPrivateTarget();
+    const marker = `<meta http-equiv="Content-Security-Policy" content="${privateContentSecurityPolicy(target.endpoint)}">`;
+    const directory = temporaryArtifact(document.replace('CSP_MARKER', marker));
+    const commit = currentCommit();
+    const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-publisher-csp-'));
+    temporaryDirectories.push(snapshotDirectory);
+    snapshotReviewedPrivateTarget({
+      rootDirectory: repositoryRoot,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      reviewedWorkflowCommit: commit,
+      outputDirectory: snapshotDirectory
+    });
+    const manifest = JSON.parse(readFileSync(join(directory, 'mtproto-target.json'), 'utf8'));
+
+    expect(() => verifyPublishedArtifact({
+      directory,
+      snapshotDirectory,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
+    })).toThrow(/CSP does not match/i);
   });
 
   it('rejects a changed artifact byte and a stale source commit', () => {

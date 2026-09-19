@@ -7,6 +7,7 @@ import {
 } from 'node:fs';
 import {relative, resolve, sep} from 'node:path';
 import {fileURLToPath} from 'node:url';
+import {readHeadContentSecurityPolicies} from './private-artifact-csp.mjs';
 
 const MANIFEST = 'mtproto-target.json';
 const SNAPSHOT = 'snapshot.json';
@@ -173,15 +174,6 @@ function privateCsp(endpoint) {
   ].join('; ') + ';';
 }
 
-function decodeHtmlEntities(value) {
-  return value
-  .replaceAll('&amp;', '&')
-  .replaceAll('&quot;', '"')
-  .replaceAll('&#39;', "'")
-  .replaceAll('&lt;', '<')
-  .replaceAll('&gt;', '>');
-}
-
 function option(args, name) {
   const index = args.indexOf(name);
   if(index === -1 || !args[index + 1] || args[index + 1].startsWith('--')) {
@@ -244,8 +236,8 @@ export function verifyPublishedArtifact({directory, snapshotDirectory, sourceRef
     fail('downloaded artifact digest does not match the verified build output');
   }
 
-  const index = decodeHtmlEntities(readFileSync(resolve(directory, 'index.html'), 'utf8'));
-  if(!index.includes(privateCsp(target.endpoint))) {
+  const policies = readHeadContentSecurityPolicies(readFileSync(resolve(directory, 'index.html'), 'utf8'));
+  if(!policies.includes(privateCsp(target.endpoint))) {
     fail('downloaded artifact CSP does not match the immutable target');
   }
   return {manifest, target, sourceRef, sourceCommit, artifactDigest};
