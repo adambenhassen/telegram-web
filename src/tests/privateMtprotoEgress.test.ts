@@ -1,5 +1,5 @@
 import {afterAll, beforeAll, describe, expect, it, vi} from 'vitest';
-import {createPrivateWorkerBlobURL} from '@helpers/createPrivateWorkerBlobURL';
+import {createPrivateWorkerBlobURL, rewritePrivateWorkerImports} from '@helpers/createPrivateWorkerBlobURL';
 
 const PRIVATE_ENDPOINT = 'wss://private.example.test:2443/apiws';
 const privateTarget = {
@@ -82,6 +82,22 @@ describe('private MTProto browser egress policy', () => {
     } finally {
       vi.stubGlobal('fetch', originalFetch);
     }
+  });
+
+  it('rewrites minified static imports to same-origin worker URLs', () => {
+    const source = [
+      'import{worker}from"./chunk.js";',
+      'import"./side-effect.js";',
+      'export{worker}from"../re-export.js";',
+      'import root from"/root.js";'
+    ].join('\n');
+    const rewritten = rewritePrivateWorkerImports(source, 'https://web.telegram.org/k/');
+
+    expect(rewritten).toContain('from"https://web.telegram.org/k/chunk.js"');
+    expect(rewritten).toContain('import"https://web.telegram.org/k/side-effect.js"');
+    expect(rewritten).toContain('from"https://web.telegram.org/re-export.js"');
+    expect(rewritten).toContain('from"https://web.telegram.org/k/root.js"');
+    expect(rewritten).not.toMatch(/(?:\bfrom\s*|\bimport\s*)(["'])(\.{1,2}\/[^"']+)\1/);
   });
 
   it('rejects a failed private worker load before creating a worker URL', async() => {

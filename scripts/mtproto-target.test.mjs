@@ -12,9 +12,10 @@ import {
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {inspect} from 'node:util';
-import {afterAll, describe, expect, it} from 'vitest';
+import {afterAll, describe, expect, it, vi} from 'vitest';
 import * as mtprotoTarget from './mtproto-target.mjs';
 import {auditPrivateArtifact} from './private-artifact.mjs';
+import {createPrivateWorkerBlobURL} from '../src/helpers/createPrivateWorkerBlobURL';
 const {assertRunnableMtprotoTarget, resolveMtprotoTarget} = mtprotoTarget;
 
 const fixturePath = resolve('scripts/fixtures/private-mtproto-public.pem');
@@ -76,6 +77,18 @@ function buildPrivateTarget(overrides = {}, outputDirectory = join(temporaryDire
     env: {...env, ...privateEnv(overrides)}
   });
   return {outputDirectory, result};
+}
+
+function findEmittedWorkers(directory, workers = []) {
+  for(const entry of readdirSync(directory, {withFileTypes: true})) {
+    const path = join(directory, entry.name);
+    if(entry.isDirectory()) {
+      findEmittedWorkers(path, workers);
+    } else if(/^index\.worker-[^/]+\.js$/.test(entry.name)) {
+      workers.push(path);
+    }
+  }
+  return workers;
 }
 
 describe('MTProto build target', () => {
@@ -304,7 +317,7 @@ describe('MTProto build target', () => {
     expect(() => auditPrivateArtifact(outputDirectory, target)).toThrow(/official Telegram MTProto route/i);
   });
 
-  it('emits a self-identifying private Vite artifact with a restrictive CSP', () => {
+  it('emits a self-identifying private Vite artifact with a blob-safe worker and restrictive CSP', async() => {
     const {outputDirectory, result} = buildPrivateTarget();
 
     expect(result.status).toBe(0);
@@ -328,6 +341,47 @@ describe('MTProto build target', () => {
     expect(executable).not.toMatch(/(?:kws[1-5]|apiw(?:_test1|1))\.web\.telegram\.org|\bapiw(?:_test1|1)\b/i);
     expect(executable).not.toContain('c3b42b026ce86b21');
     expect(mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toEqual(manifest);
+
+    const workerPaths = findEmittedWorkers(outputDirectory);
+    expect(workerPaths.length).toBeGreaterThan(0);
+    const relativeImportPattern = /(?:\bfrom\s*|\bimport\s*)(["'])(\.{1,2}\/[^"']+)\1/;
+    const workerPath = workerPaths.find((path) =>
+      relativeImportPattern.test(readFileSync(path, 'utf8'))
+    ) || workerPaths[0];
+    const workerSource = readFileSync(workerPath, 'utf8');
+    const relativeImport = workerSource.match(relativeImportPattern);
+
+    if(relativeImport) {
+      const originalFetch = globalThis.fetch;
+      const originalCreateObjectURL = URL.createObjectURL;
+      const createObjectURL = vi.fn(() => 'blob:private-mtproto-worker');
+      vi.stubGlobal('fetch', vi.fn(async() => ({
+        ok: true,
+        text: async() => workerSource
+      })));
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: createObjectURL
+      });
+
+      try {
+        await expect(createPrivateWorkerBlobURL(workerPath)).resolves.toBe('blob:private-mtproto-worker');
+        const blob = createObjectURL.mock.calls[0][0];
+        const blobSource = await blob.text();
+        expect(blobSource).not.toMatch(relativeImportPattern);
+        expect(blobSource).toContain(new URL(relativeImport[2], location.href).href);
+      } finally {
+        vi.stubGlobal('fetch', originalFetch);
+        if(originalCreateObjectURL) {
+          Object.defineProperty(URL, 'createObjectURL', {
+            configurable: true,
+            value: originalCreateObjectURL
+          });
+        } else {
+          delete URL.createObjectURL;
+        }
+      }
+    }
   }, 60_000);
 
   it('fails private bundle auditing when the sidecar is missing', () => {

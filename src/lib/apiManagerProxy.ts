@@ -28,7 +28,7 @@ import idleController from '@helpers/idleController';
 import ServiceMessagePort from '@lib/serviceWorker/serviceMessagePort';
 import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
 import {makeWorkerURL} from '@helpers/setWorkerProxy';
-import {createPrivateWorkerBlobURL} from '@helpers/createPrivateWorkerBlobURL';
+import {createPrivateWorkerBlobURL, rewritePrivateWorkerImports} from '@helpers/createPrivateWorkerBlobURL';
 import ServiceWorkerURL from '../../sw?worker&url';
 import MainWorkerURL from './mainWorker/index.worker.ts?worker&url';
 import setDeepProperty, {joinDeepPath, splitDeepPath} from '@helpers/object/setDeepProperty';
@@ -932,7 +932,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
         const pathnameSplitted = location.pathname.split('/');
         pathnameSplitted[pathnameSplitted.length - 1] = '';
         const pre = location.origin + pathnameSplitted.join('/');
-        text = text.replace(/(import (?:.+? from )?['"])\//g, '$1' + pre);
+        text = rewritePrivateWorkerImports(text, pre);
 
         const blob = new Blob([text], {type: 'application/javascript'});
         return blob;
