@@ -213,7 +213,7 @@ export function readHeadContentSecurityPolicies(document) {
       headState = 'after';
     }
     if(headState === 'in' && tag.name === 'meta') {
-      const httpEquiv = tag.attributes.get('http-equiv')?.trim().toLowerCase();
+      const httpEquiv = tag.attributes.get('http-equiv')?.toLowerCase();
       const content = tag.attributes.get('content');
       if(httpEquiv === 'content-security-policy' && content !== undefined) {
         policies.push(content);
