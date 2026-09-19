@@ -8,6 +8,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import {relative, resolve, sep} from 'node:path';
+import {readHeadContentSecurityPolicies} from './private-artifact-csp.mjs';
 
 export const PRIVATE_ARTIFACT_MANIFEST = 'mtproto-target.json';
 
@@ -155,6 +156,28 @@ export function privateContentSecurityPolicy(endpoint) {
     "manifest-src 'self'",
     `connect-src 'self' ${endpoint}`
   ].join('; ') + ';';
+}
+
+export function verifyPrivateArtifactCsp(directory, endpoint) {
+  const indexPath = resolve(directory, 'index.html');
+  if(!existsSync(indexPath)) {
+    invalidArtifact('index document is missing');
+  }
+
+  const expectedPolicy = privateContentSecurityPolicy(endpoint);
+  const policies = readHeadContentSecurityPolicies(readFileSync(indexPath, 'utf8'));
+  if(!policies.includes(expectedPolicy)) {
+    invalidArtifact('index document CSP does not match the configured endpoint');
+  }
+
+  const connectSources = policies
+  .flatMap((policy) => [...policy.matchAll(/connect-src\s+([^;]+)/gi)])
+  .flatMap((match) => match[1].trim().split(/\s+/))
+  .map((source) => source.replace(/^['"]|['"]$/g, ''))
+  .filter((source) => source.startsWith('wss://'));
+  if(connectSources.some((source) => source !== endpoint)) {
+    invalidArtifact('index document CSP contains an unexpected WSS endpoint');
+  }
 }
 
 export function auditPrivateArtifact(directory, target) {

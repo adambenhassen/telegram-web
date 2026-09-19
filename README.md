@@ -44,6 +44,8 @@ The build fails closed when target validation or the production-bundle audit fai
 
 Do not edit the sidecar or swap endpoints and keys in an existing output. Build a new artifact with the desired three variables. Leaving these variables unset keeps the ordinary Telegram build unchanged and does not emit a private manifest.
 
+The `Private MTProto Artifact Request` workflow is the data-only manual entry point. It accepts a target ref as input and records it without checking out code or installing dependencies. The trusted `Private MTProto Artifact Publication` workflow receives only successful requests from the reviewed `master` workflow, resolves `refs/heads/master` or an exact release tag listed with its reviewed commit in `ci/private-artifact-reviewed-release-refs.json`, and rejects every other ref before dependency installation. It snapshots the reviewed target attestation and public key before the build, checks out only the allowlisted commit, and re-verifies the downloaded bundle, sidecar digest, source commit, CSP, and snapshot in an isolated publisher before upload. Changing the workflow definition, target, public-key bytes, or source commit without passing the reviewed request and snapshot checks fails closed.
+
 ### Running in docker
 
 #### Developing: 
