@@ -153,6 +153,10 @@ export function verifyPublishedArtifact({directory, snapshotDirectory, sourceRef
   }
 
   const keyPath = resolve(snapshotDirectory, reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE);
+  const keyRelativePath = relative(snapshotDirectory, keyPath);
+  if(!keyRelativePath || keyRelativePath === '..' || keyRelativePath.startsWith('../')) {
+    fail('target public key must stay inside the snapshot');
+  }
   if(!existsSync(keyPath) || !statSync(keyPath).isFile()) fail('target public key is missing');
   if(sha256File(keyPath) !== reviewed.publicKeySha256) {
     fail('target public-key digest does not match the attestation');

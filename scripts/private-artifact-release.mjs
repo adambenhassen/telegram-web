@@ -248,6 +248,7 @@ export function snapshotReviewedPrivateTarget({
     throw new Error('[MT] private artifact release reviewed target attestation is invalid', {cause});
   }
   assertExactFields(reviewed, REVIEWED_TARGET_FIELDS, 'reviewed target attestation');
+  assertString(reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE, 'reviewed target key file');
   repositoryRelativePath(rootDirectory, reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE, 'reviewed target key file');
   const keyPath = resolve(outputDirectory, reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE);
   mkdirSync(dirname(keyPath), {recursive: true});
