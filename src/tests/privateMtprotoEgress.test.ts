@@ -84,6 +84,19 @@ describe('private MTProto browser egress policy', () => {
     }
   });
 
+  it('rejects a failed private worker load before creating a worker URL', async() => {
+    const fetchWorker = vi.fn(async() => ({ok: false, status: 503, text: async() => ''}));
+    const originalFetch = globalThis.fetch;
+    vi.stubGlobal('fetch', fetchWorker);
+
+    try {
+      await expect(createPrivateWorkerBlobURL('index.worker.js')).rejects.toThrow(/unable to load private MTProto worker/);
+      expect(fetchWorker).toHaveBeenCalledWith('index.worker.js');
+    } finally {
+      vi.stubGlobal('fetch', originalFetch);
+    }
+  });
+
   it('allows the configured WSS endpoint and blocks an unconfigured origin at the browser dial boundary', () => {
     FakeWebSocket.urls = [];
     vi.stubGlobal('WebSocket', FakeWebSocket);
