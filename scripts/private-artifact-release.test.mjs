@@ -220,6 +220,22 @@ describe('private artifact publication attestation', () => {
     .toThrow(/CSP does not match/i);
   });
 
+  it.each([
+    ['a non-ASCII tag start before the head', '<!doctype html><html><\u00e9><head><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['a digit tag start in the head', '<!doctype html><html><head><9foo><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>']
+  ])('rejects a CSP after %s because the malformed markup leaves head context', (_name, document) => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-malformed-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://private.example.test:2443/apiws';
+    writeFileSync(join(directory, 'index.html'), document.replace(
+      'CSP_POLICY',
+      privateContentSecurityPolicy(endpoint)
+    ));
+
+    expect(() => verifyPrivateArtifactCsp(directory, endpoint))
+    .toThrow(/CSP does not match/i);
+  });
+
   it('uses the first duplicate CSP attribute, matching browser parsing', () => {
     const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-duplicate-'));
     temporaryDirectories.push(directory);
@@ -303,6 +319,36 @@ describe('private artifact publication attestation', () => {
     ));
     const commit = currentCommit();
     const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-publisher-csp-lexing-'));
+    temporaryDirectories.push(snapshotDirectory);
+    snapshotReviewedPrivateTarget({
+      rootDirectory: repositoryRoot,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      reviewedWorkflowCommit: commit,
+      outputDirectory: snapshotDirectory
+    });
+    const manifest = JSON.parse(readFileSync(join(directory, 'mtproto-target.json'), 'utf8'));
+
+    expect(() => verifyPublishedArtifact({
+      directory,
+      snapshotDirectory,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
+    })).toThrow(/CSP does not match/i);
+  });
+
+  it.each([
+    ['a non-ASCII tag start before the head', '<!doctype html><html><\u00e9><head><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['a digit tag start in the head', '<!doctype html><html><head><9foo><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>']
+  ])('publisher rejects a CSP after %s because the malformed markup leaves head context', (_name, document) => {
+    const {target} = loadReviewedPrivateTarget();
+    const directory = temporaryArtifact(document.replace(
+      'CSP_POLICY',
+      privateContentSecurityPolicy(target.endpoint)
+    ));
+    const commit = currentCommit();
+    const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-publisher-csp-malformed-'));
     temporaryDirectories.push(snapshotDirectory);
     snapshotReviewedPrivateTarget({
       rootDirectory: repositoryRoot,

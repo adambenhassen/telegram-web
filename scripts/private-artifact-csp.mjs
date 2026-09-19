@@ -175,6 +175,9 @@ export function readHeadContentSecurityPolicies(document) {
     if(end === -1) break;
     const tag = parseTag(document.slice(index, end + 1));
     if(!tag) {
+      if(headState !== 'after' && document[index + 1] !== '!' && document[index + 1] !== '?') {
+        headState = 'after';
+      }
       index = end + 1;
       continue;
     }
