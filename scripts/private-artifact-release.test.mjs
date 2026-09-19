@@ -116,8 +116,12 @@ describe('private artifact publication attestation', () => {
     expect(publisherWorkflow).toContain('workflow_run:');
     expect(publisherWorkflow).not.toContain('workflow_dispatch:');
     expect(publisherWorkflow).toContain('github.event.workflow_run.head_branch');
-    expect(requestWorkflow).toContain('workflow_dispatch:');
-    expect(requestWorkflow).toContain('target_ref:');
+    expect(requestWorkflow).toContain('repository_dispatch:');
+    expect(requestWorkflow).not.toContain('workflow_dispatch:');
+    expect(requestWorkflow).toContain('github.event.client_payload.target_ref');
+    expect(requestWorkflow).toContain("github.ref == 'refs/heads/master'");
+    expect(requestWorkflow).toContain('permissions: {}');
+    expect(requestWorkflow).not.toContain('actions: write');
     expect(requestWorkflow).not.toContain('pnpm install');
   });
 

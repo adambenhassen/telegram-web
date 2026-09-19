@@ -1,26 +1,24 @@
 name: Private MTProto Artifact Request
 
+# repository_dispatch evaluates this workflow from the repository's default
+# branch, so an unreviewed target ref cannot replace the request definition.
 on:
-  workflow_dispatch:
-    inputs:
-      target_ref:
-        description: Reviewed target ref, refs/heads/master or an explicitly reviewed release tag
-        required: true
-        type: string
+  repository_dispatch:
+    types:
+      - private-artifact-request
 
-permissions:
-  actions: write
+permissions: {}
 
 jobs:
   request:
     name: Record data-only publication request
+    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
-    permissions:
-      actions: write
+    permissions: {}
     steps:
       - name: Write the target ref request
         env:
-          PRIVATE_ARTIFACT_TARGET_REF: ${{ inputs.target_ref }}
+          PRIVATE_ARTIFACT_TARGET_REF: ${{ github.event.client_payload.target_ref }}
         run: >-
           node --input-type=module -e
           "import {writeFileSync} from 'node:fs';
