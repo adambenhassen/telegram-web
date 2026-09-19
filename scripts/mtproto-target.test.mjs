@@ -345,13 +345,17 @@ describe('MTProto build target', () => {
     const workerPaths = findEmittedWorkers(outputDirectory);
     expect(workerPaths.length).toBeGreaterThan(0);
     const relativeImportPattern = /(?:\bfrom\s*|\bimport\s*)(["'])(\.{1,2}\/[^"']+)\1/;
+    const relativeDynamicImportPattern = /import\s*\(\s*(["'\x60])(\.{1,2}\/[^"'\x60]+)\1\s*\)/;
     const workerPath = workerPaths.find((path) =>
+      relativeDynamicImportPattern.test(readFileSync(path, 'utf8'))
+    ) || workerPaths.find((path) =>
       relativeImportPattern.test(readFileSync(path, 'utf8'))
     ) || workerPaths[0];
     const workerSource = readFileSync(workerPath, 'utf8');
     const relativeImport = workerSource.match(relativeImportPattern);
+    const relativeDynamicImport = workerSource.match(relativeDynamicImportPattern);
 
-    if(relativeImport) {
+    if(relativeImport || relativeDynamicImport) {
       const originalFetch = globalThis.fetch;
       const originalCreateObjectURL = URL.createObjectURL;
       const createObjectURL = vi.fn(() => 'blob:private-mtproto-worker');
@@ -369,7 +373,9 @@ describe('MTProto build target', () => {
         const blob = createObjectURL.mock.calls[0][0];
         const blobSource = await blob.text();
         expect(blobSource).not.toMatch(relativeImportPattern);
-        expect(blobSource).toContain(new URL(relativeImport[2], location.href).href);
+        expect(blobSource).not.toMatch(relativeDynamicImportPattern);
+        const firstRelativeSpecifier = relativeDynamicImport?.[2] || relativeImport?.[2];
+        expect(blobSource).toContain(new URL(firstRelativeSpecifier, location.href).href);
       } finally {
         vi.stubGlobal('fetch', originalFetch);
         if(originalCreateObjectURL) {

@@ -89,7 +89,9 @@ describe('private MTProto browser egress policy', () => {
       'import{worker}from"./chunk.js";',
       'import"./side-effect.js";',
       'export{worker}from"../re-export.js";',
-      'import root from"/root.js";'
+      'import root from"/root.js";',
+      'import("./quoted.js")',
+      'import(' + String.fromCharCode(96) + './template.js' + String.fromCharCode(96) + ')'
     ].join('\n');
     const rewritten = rewritePrivateWorkerImports(source, 'https://web.telegram.org/k/');
 
@@ -97,7 +99,10 @@ describe('private MTProto browser egress policy', () => {
     expect(rewritten).toContain('import"https://web.telegram.org/k/side-effect.js"');
     expect(rewritten).toContain('from"https://web.telegram.org/re-export.js"');
     expect(rewritten).toContain('from"https://web.telegram.org/k/root.js"');
+    expect(rewritten).toContain('import("https://web.telegram.org/k/quoted.js")');
+    expect(rewritten).toContain('import(' + String.fromCharCode(96) + 'https://web.telegram.org/k/template.js' + String.fromCharCode(96) + ')');
     expect(rewritten).not.toMatch(/(?:\bfrom\s*|\bimport\s*)(["'])(\.{1,2}\/[^"']+)\1/);
+    expect(rewritten).not.toMatch(/import\s*\(\s*(["'\x60])(\.{1,2}\/[^"'\x60]+)\1\s*\)/);
   });
 
   it('rejects a failed private worker load before creating a worker URL', async() => {
