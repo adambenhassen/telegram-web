@@ -154,7 +154,7 @@ export function readHeadContentSecurityPolicies(document) {
       continue;
     }
     if(document[index] !== '<') {
-      if(headState !== 'after' && !/\s/.test(document[index])) headState = 'after';
+      if(headState !== 'after' && !/[\t\n\f\r ]/.test(document[index])) headState = 'after';
       index++;
       continue;
     }
