@@ -183,7 +183,11 @@ describe('private artifact publication attestation', () => {
   it.each([
     ['an HTML comment', '<head><!-- CSP_MARKER --></head><body></body>'],
     ['the document body', '<head></head><body>CSP_MARKER</body>'],
-    ['a fake head after the body', '<!doctype html><html><body><head>CSP_MARKER</head></body></html>']
+    ['a fake head after the body', '<!doctype html><html><body><head>CSP_MARKER</head></body></html>'],
+    ['a title raw-text element', '<!doctype html><html><head><title>CSP_MARKER</title></head><body></body></html>'],
+    ['a textarea raw-text element', '<!doctype html><html><head><textarea>CSP_MARKER</textarea></head><body></body></html>'],
+    ['a template element', '<!doctype html><html><head><template>CSP_MARKER</template></head><body></body></html>'],
+    ['an SVG foreign-content element', '<!doctype html><html><head><svg>CSP_MARKER</svg></head><body></body></html>']
   ])('rejects a CSP marker in %s instead of a real head meta element', (_name, document) => {
     const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-'));
     temporaryDirectories.push(directory);
@@ -212,8 +216,31 @@ describe('private artifact publication attestation', () => {
   });
 
   it.each([
+    ['textarea', '<textarea></textarea>'],
+    ['SVG', '<svg></svg>']
+  ])('does not treat CSP after %s as document-head policy', (_name, container) => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-context-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://private.example.test:2443/apiws';
+    const policy = privateContentSecurityPolicy(endpoint);
+    writeFileSync(join(directory, 'index.html'), [
+      '<!doctype html><html><head>',
+      container,
+      `<meta http-equiv="Content-Security-Policy" content="${policy}">`,
+      '</head><body></body></html>'
+    ].join(''));
+
+    expect(() => verifyPrivateArtifactCsp(directory, endpoint))
+    .toThrow(/CSP does not match/i);
+  });
+
+  it.each([
     ['an HTML comment', '<!doctype html><html><head><!-- CSP_MARKER --></head><body></body></html>'],
-    ['the document body', '<!doctype html><html><head></head><body>CSP_MARKER</body></html>']
+    ['the document body', '<!doctype html><html><head></head><body>CSP_MARKER</body></html>'],
+    ['a title raw-text element', '<!doctype html><html><head><title>CSP_MARKER</title></head><body></body></html>'],
+    ['a textarea raw-text element', '<!doctype html><html><head><textarea>CSP_MARKER</textarea></head><body></body></html>'],
+    ['a template element', '<!doctype html><html><head><template>CSP_MARKER</template></head><body></body></html>'],
+    ['an SVG foreign-content element', '<!doctype html><html><head><svg>CSP_MARKER</svg></head><body></body></html>']
   ])('publisher rejects a CSP marker in %s instead of a real head meta element', (_name, document) => {
     const {target} = loadReviewedPrivateTarget();
     const marker = `<meta http-equiv="Content-Security-Policy" content="${privateContentSecurityPolicy(target.endpoint)}">`;
