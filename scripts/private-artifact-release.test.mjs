@@ -236,6 +236,22 @@ describe('private artifact publication attestation', () => {
     .toThrow(/CSP does not match/i);
   });
 
+  it.each([
+    ['whitespace after the tag opener', '<!doctype html><html><head>< meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['whitespace after the closing slash', '<!doctype html><html><head>< /meta><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>']
+  ])('rejects a CSP parsed through %s instead of by the browser', (_name, document) => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-tag-start-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://private.example.test:2443/apiws';
+    writeFileSync(join(directory, 'index.html'), document.replace(
+      'CSP_POLICY',
+      privateContentSecurityPolicy(endpoint)
+    ));
+
+    expect(() => verifyPrivateArtifactCsp(directory, endpoint))
+    .toThrow(/CSP does not match/i);
+  });
+
   it('uses the first duplicate CSP attribute, matching browser parsing', () => {
     const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-duplicate-'));
     temporaryDirectories.push(directory);
@@ -349,6 +365,36 @@ describe('private artifact publication attestation', () => {
     ));
     const commit = currentCommit();
     const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-publisher-csp-malformed-'));
+    temporaryDirectories.push(snapshotDirectory);
+    snapshotReviewedPrivateTarget({
+      rootDirectory: repositoryRoot,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      reviewedWorkflowCommit: commit,
+      outputDirectory: snapshotDirectory
+    });
+    const manifest = JSON.parse(readFileSync(join(directory, 'mtproto-target.json'), 'utf8'));
+
+    expect(() => verifyPublishedArtifact({
+      directory,
+      snapshotDirectory,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
+    })).toThrow(/CSP does not match/i);
+  });
+
+  it.each([
+    ['whitespace after the tag opener', '<!doctype html><html><head>< meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['whitespace after the closing slash', '<!doctype html><html><head>< /meta><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>']
+  ])('publisher rejects a CSP parsed through %s instead of by the browser', (_name, document) => {
+    const {target} = loadReviewedPrivateTarget();
+    const directory = temporaryArtifact(document.replace(
+      'CSP_POLICY',
+      privateContentSecurityPolicy(target.endpoint)
+    ));
+    const commit = currentCommit();
+    const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-publisher-csp-tag-start-'));
     temporaryDirectories.push(snapshotDirectory);
     snapshotReviewedPrivateTarget({
       rootDirectory: repositoryRoot,

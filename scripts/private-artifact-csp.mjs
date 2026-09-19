@@ -1,8 +1,6 @@
 const HTML_WHITESPACE_PATTERN = '[\\t\\n\\f\\r ]';
 const HTML_WHITESPACE = new RegExp(HTML_WHITESPACE_PATTERN);
-const HTML_TAG_START = new RegExp(
-  `^<${HTML_WHITESPACE_PATTERN}*(\\/?)${HTML_WHITESPACE_PATTERN}*([A-Za-z][A-Za-z0-9:-]*)`
-);
+const HTML_TAG_START = /^<(\/?)([A-Za-z][A-Za-z0-9:-]*)/;
 const HTML_SELF_CLOSING_TAG = new RegExp(`/${HTML_WHITESPACE_PATTERN}*>$`);
 
 function isHtmlWhitespace(character) {
