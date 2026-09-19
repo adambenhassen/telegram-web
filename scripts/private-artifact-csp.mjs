@@ -1,6 +1,6 @@
 const HTML_WHITESPACE_PATTERN = '[\\t\\n\\f\\r ]';
 const HTML_WHITESPACE = new RegExp(HTML_WHITESPACE_PATTERN);
-const HTML_TAG_START = /^<(\/?)([A-Za-z][A-Za-z0-9:-]*)/;
+const HTML_TAG_START = /^<(\/?)([A-Za-z][A-Za-z0-9:-]*)(?=[\t\n\f\r \/>])/;
 const HTML_SELF_CLOSING_TAG = new RegExp(`/${HTML_WHITESPACE_PATTERN}*>$`);
 
 function isHtmlWhitespace(character) {
@@ -50,6 +50,7 @@ const HEAD_ELEMENTS = new Set([
   'title'
 ]);
 const FOREIGN_CONTENT_ELEMENTS = new Set(['math', 'svg', 'template']);
+const HEAD_EXITING_END_TAGS = new Set(['body', 'br', 'head', 'html']);
 
 function skipNestedContent(document, start, name) {
   const stack = [name];
@@ -181,7 +182,7 @@ export function readHeadContentSecurityPolicies(document) {
     }
 
     if(tag.closing) {
-      if(tag.name === 'head' && headState === 'in') headState = 'after';
+      if(headState !== 'after' && HEAD_EXITING_END_TAGS.has(tag.name)) headState = 'after';
       index = end + 1;
       continue;
     }

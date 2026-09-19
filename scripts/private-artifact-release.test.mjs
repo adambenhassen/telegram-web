@@ -222,7 +222,13 @@ describe('private artifact publication attestation', () => {
 
   it.each([
     ['a non-ASCII tag start before the head', '<!doctype html><html><\u00e9><head><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
-    ['a digit tag start in the head', '<!doctype html><html><head><9foo><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>']
+    ['a digit tag start in the head', '<!doctype html><html><head><9foo><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['a question-mark tag name in the head', '<!doctype html><html><head><meta?><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['an underscore tag name in the head', '<!doctype html><html><head><meta_bad><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['an equals-sign tag name in the head', '<!doctype html><html><head><meta=bad><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['a body end tag in the head', '<!doctype html><html><head></body><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head></html>'],
+    ['an html end tag in the head', '<!doctype html><html><head></html><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head></html>'],
+    ['a br end tag in the head', '<!doctype html><html><head></br><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head></html>']
   ])('rejects a CSP after %s because the malformed markup leaves head context', (_name, document) => {
     const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-malformed-'));
     temporaryDirectories.push(directory);
@@ -356,7 +362,13 @@ describe('private artifact publication attestation', () => {
 
   it.each([
     ['a non-ASCII tag start before the head', '<!doctype html><html><\u00e9><head><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
-    ['a digit tag start in the head', '<!doctype html><html><head><9foo><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>']
+    ['a digit tag start in the head', '<!doctype html><html><head><9foo><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['a question-mark tag name in the head', '<!doctype html><html><head><meta?><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['an underscore tag name in the head', '<!doctype html><html><head><meta_bad><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['an equals-sign tag name in the head', '<!doctype html><html><head><meta=bad><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head><body></body></html>'],
+    ['a body end tag in the head', '<!doctype html><html><head></body><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head></html>'],
+    ['an html end tag in the head', '<!doctype html><html><head></html><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head></html>'],
+    ['a br end tag in the head', '<!doctype html><html><head></br><meta http-equiv="Content-Security-Policy" content="CSP_POLICY"></head></html>']
   ])('publisher rejects a CSP after %s because the malformed markup leaves head context', (_name, document) => {
     const {target} = loadReviewedPrivateTarget();
     const directory = temporaryArtifact(document.replace(
