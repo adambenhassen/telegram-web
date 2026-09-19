@@ -8,41 +8,53 @@ on:
 
 permissions:
   contents: read
-  actions: write
 
 jobs:
   repository-ci:
     name: Repository CI gate
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/')
     uses: ./.github/workflows/ci.yml
 
   deployment-stack:
     name: Deployment stack gate
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/')
     uses: ./.github/workflows/deployment-stack-checks.yml
 
   private-build:
-    name: Build and publish audited private artifact
+    name: Build and stage audited private artifact
+    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/')
     needs:
       - repository-ci
       - deployment-stack
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+    outputs:
+      source_commit: ${{ steps.verify.outputs.source_commit }}
+      artifact_digest_hex: ${{ steps.verify.outputs.artifact_digest_hex }}
     env:
       PRIVATE_ARTIFACT_COMMIT: ${{ github.sha }}
+      PRIVATE_ARTIFACT_REF: ${{ github.ref }}
 
     steps:
       - name: Check out the publication commit
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           ref: ${{ github.sha }}
-          fetch-depth: 1
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify reviewed publication ref
+        run: node scripts/private-artifact-release.mjs validate-ref
 
       - name: Set up pnpm
-        uses: pnpm/action-setup@v4
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
         with:
           version: 11.16.0
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.18.0
           cache: pnpm
@@ -89,10 +101,33 @@ jobs:
           MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
         run: pnpm run verify-private-artifact -- --dist dist-private --commit "$PRIVATE_ARTIFACT_COMMIT"
 
-      - name: Publish artifact and sidecar as one release unit
-        uses: actions/upload-artifact@v4
+      - name: Stage audited artifact for the isolated publisher
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-mtproto-${{ steps.verify.outputs.source_commit }}-${{ steps.verify.outputs.artifact_digest_hex }}
+          name: private-mtproto-staged-${{ steps.verify.outputs.source_commit }}-${{ steps.verify.outputs.artifact_digest_hex }}
+          path: dist-private
+          if-no-files-found: error
+          retention-days: 1
+
+  private-publish:
+    name: Publish audited private artifact
+    if: needs.private-build.result == 'success' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/'))
+    needs: private-build
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+
+    steps:
+      - name: Download the verified artifact
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: private-mtproto-staged-${{ needs.private-build.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
+          path: dist-private
+
+      - name: Publish artifact and sidecar as one release unit
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-mtproto-${{ needs.private-build.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
           path: dist-private
           if-no-files-found: error
           retention-days: 30

@@ -8,6 +8,7 @@ import {
   writeFileSync
 } from 'node:fs';
 import {relative, resolve, sep} from 'node:path';
+import {JSDOM} from 'jsdom';
 
 export const PRIVATE_ARTIFACT_MANIFEST = 'mtproto-target.json';
 
@@ -164,19 +165,17 @@ export function verifyPrivateArtifactCsp(directory, endpoint) {
   }
 
   const expectedPolicy = privateContentSecurityPolicy(endpoint);
-  const html = readFileSync(indexPath, 'utf8')
-  .replaceAll('&#39;', "'")
-  .replaceAll('&quot;', '"')
-  .replaceAll('&amp;', '&');
-  const policies = [...html.matchAll(/<meta\b[^>]*>/gi)]
-  .filter(([tag]) => /http-equiv\s*=\s*(['"])Content-Security-Policy\1/i.test(tag))
-  .map(([tag]) => tag.match(/\bcontent\s*=\s*(['"])(.*?)\1/i)?.[2])
-  .filter((policy) => policy !== undefined);
+  const document = new JSDOM(readFileSync(indexPath, 'utf8')).window.document;
+  const policies = [...document.head.querySelectorAll('meta')]
+  .filter((meta) => meta.getAttribute('http-equiv')?.trim().toLowerCase() === 'content-security-policy')
+  .map((meta) => meta.getAttribute('content'))
+  .filter((policy) => policy !== null);
   if(!policies.includes(expectedPolicy)) {
     invalidArtifact('index document CSP does not match the configured endpoint');
   }
 
-  const connectSources = [...policies.join('\n').matchAll(/connect-src\s+([^;]+)/gi)]
+  const connectSources = policies
+  .flatMap((policy) => [...policy.matchAll(/connect-src\s+([^;]+)/gi)])
   .flatMap((match) => match[1].trim().split(/\s+/))
   .map((source) => source.replace(/^['"]|['"]$/g, ''))
   .filter((source) => source.startsWith('wss://'));

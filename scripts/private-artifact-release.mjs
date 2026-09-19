@@ -15,6 +15,7 @@ import {
 } from './private-artifact.mjs';
 
 export const REVIEWED_PRIVATE_TARGET = 'ci/private-mtproto-target.json';
+export const REVIEWED_RELEASE_REFS = 'ci/private-artifact-reviewed-release-refs.json';
 export const PRIVATE_TARGET_VARIABLES = [
   'MTPROTO_TARGET_MODE',
   'MTPROTO_PRIVATE_ENDPOINT',
@@ -22,6 +23,8 @@ export const PRIVATE_TARGET_VARIABLES = [
 ];
 
 const ROOT_DIRECTORY = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+const MASTER_REF = 'refs/heads/master';
+const REVIEWED_RELEASE_REF_PATTERN = /^refs\/tags\/release(?:[/-])[A-Za-z0-9][A-Za-z0-9._/-]*$/;
 const REVIEWED_TARGET_FIELDS = [
   ...PRIVATE_TARGET_VARIABLES,
   'publicKeySha256',
@@ -50,6 +53,12 @@ function assertString(value, label) {
   }
 }
 
+function assertCommitId(value, label) {
+  if(typeof value !== 'string' || !/^[0-9a-f]{40}$/.test(value)) {
+    fail(`${label} is not a full commit id`);
+  }
+}
+
 function sha256File(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
@@ -63,6 +72,92 @@ function gitCommit(rootDirectory) {
   } catch(cause) {
     throw new Error('[MT] private artifact release cannot determine source commit', {cause});
   }
+}
+
+function gitFile(rootDirectory, gitRef, filePath) {
+  try {
+    return execFileSync('git', ['show', `${gitRef}:${filePath}`], {
+      cwd: rootDirectory,
+      encoding: 'utf8'
+    });
+  } catch(cause) {
+    throw new Error(`[MT] private artifact release cannot read ${filePath} from ${gitRef}`, {cause});
+  }
+}
+
+function validateReviewedReleaseRefs(value) {
+  if(!Array.isArray(value)) {
+    fail('reviewed release ref list is not an array');
+  }
+
+  for(const entry of value) {
+    assertExactFields(entry, ['ref', 'commit'], 'reviewed release ref');
+    assertString(entry.ref, 'reviewed release ref name');
+    assertCommitId(entry.commit, 'reviewed release ref commit');
+    if(!REVIEWED_RELEASE_REF_PATTERN.test(entry.ref)) {
+      fail('reviewed release ref must be a release tag');
+    }
+  }
+  return value;
+}
+
+export function loadReviewedReleaseRefs({
+  rootDirectory = ROOT_DIRECTORY,
+  gitRef = 'refs/remotes/origin/master'
+} = {}) {
+  let reviewed;
+  try {
+    reviewed = JSON.parse(gitFile(rootDirectory, gitRef, REVIEWED_RELEASE_REFS));
+  } catch(cause) {
+    if(cause instanceof Error && cause.message.startsWith('[MT] private artifact release cannot read')) {
+      throw cause;
+    }
+    throw new Error('[MT] private artifact release reviewed ref list is invalid', {cause});
+  }
+  assertExactFields(reviewed, ['releaseRefs'], 'reviewed release ref list');
+  return validateReviewedReleaseRefs(reviewed.releaseRefs);
+}
+
+export function assertPublicationRef(ref, commit, reviewedReleaseRefs = []) {
+  assertString(ref, 'publication ref');
+  assertCommitId(commit, 'publication ref commit');
+
+  if(ref === MASTER_REF) {
+    return {ref, commit};
+  }
+  if(!REVIEWED_RELEASE_REF_PATTERN.test(ref)) {
+    fail('publication ref must be refs/heads/master or an explicitly reviewed release ref');
+  }
+
+  const reviewed = validateReviewedReleaseRefs(reviewedReleaseRefs)
+  .find((entry) => entry.ref === ref);
+  if(!reviewed) {
+    fail('publication ref is not explicitly reviewed');
+  }
+  if(reviewed.commit !== commit) {
+    fail('publication ref commit does not match the reviewed release ref');
+  }
+  return {ref, commit};
+}
+
+export function validatePublicationRef({
+  rootDirectory = ROOT_DIRECTORY,
+  environment = process.env,
+  reviewedReleaseRefs
+} = {}) {
+  const ref = environment.PRIVATE_ARTIFACT_REF || environment.GITHUB_REF;
+  const commit = environment.PRIVATE_ARTIFACT_COMMIT || environment.GITHUB_SHA;
+  assertString(ref, 'publication ref');
+  assertCommitId(commit, 'publication ref commit');
+  const reviewed = reviewedReleaseRefs ?? (
+    ref !== MASTER_REF && REVIEWED_RELEASE_REF_PATTERN.test(ref)
+      ? loadReviewedReleaseRefs({rootDirectory})
+      : []
+  );
+  const result = assertPublicationRef(ref, commit, reviewed);
+  console.log(`[private-artifact] publicationRef=${result.ref}`);
+  console.log(`[private-artifact] publicationCommit=${result.commit}`);
+  return result;
 }
 
 function targetFromEnvironment(environment) {
@@ -176,15 +271,20 @@ export function verifyPrivateArtifactRelease({
   expectedCommit,
   environment = process.env,
   rootDirectory = ROOT_DIRECTORY,
-  attestationPath
+  attestationPath,
+  reviewedReleaseRefs
 }) {
   if(typeof directory !== 'string' || !directory) {
     fail('artifact directory is missing');
   }
 
+  const publication = validatePublicationRef({rootDirectory, environment, reviewedReleaseRefs});
   const {reviewed, target} = loadReviewedPrivateTarget({rootDirectory, attestationPath});
   assertReviewedEnvironment(reviewed, environment);
-  const commit = assertCommit(expectedCommit, rootDirectory);
+  const commit = assertCommit(expectedCommit || publication.commit, rootDirectory);
+  if(commit !== publication.commit) {
+    fail('publication commit does not match the reviewed publication ref');
+  }
   const manifest = verifyPrivateArtifactManifest(directory, target);
   verifyPrivateArtifactCsp(directory, target.endpoint);
   if(manifest.sourceCommit !== commit) {
@@ -197,7 +297,8 @@ export function verifyPrivateArtifactRelease({
     artifact_digest: manifest.artifactDigest,
     artifact_digest_hex: artifactDigestHex,
     key_fingerprint: target.fingerprint,
-    source_commit: commit
+    source_commit: commit,
+    publication_ref: publication.ref
   });
   return {manifest, target, commit};
 }
@@ -212,6 +313,10 @@ function option(args, name, fallback) {
 
 function main() {
   const [command = 'verify', ...args] = process.argv.slice(2);
+  if(command === 'validate-ref') {
+    validatePublicationRef();
+    return;
+  }
   const {reviewed, target} = loadReviewedPrivateTarget();
   assertReviewedEnvironment(reviewed);
 
