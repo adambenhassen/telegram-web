@@ -41,7 +41,7 @@ const TRUSTED_MT_PROTO_MODULI = [
 const PRIVATE_EXECUTABLE_EXTENSIONS = new Set(['.js', '.mjs']);
 const OFFICIAL_MT_PROTO_ROUTE = /(?:kws[1-5](?:-1)?|pluto(?:-1)?|venus(?:-1)?|aurora(?:-1)?|vesta(?:-1)?|flora(?:-1)?)\.web\.telegram\.org(?:[/:?#]|$)|web\.telegram\.org\/(?:apiw(?:s|_test1|1)?)(?:[/:?#]|$)/i;
 const OFFICIAL_MT_PROTO_IP = /\b(?:149\.154|149\.155|91\.108)\.\d{1,3}\.\d{1,3}\b/;
-const HTTP_MTPROTO_ROUTE = /\bapiw(?:_test1|1)\b|(?:https?|http):\/\/[^\s"'`<>]+\/apiw(?:_test1|1)(?:[/?#"'`<>\s]|$)/i;
+const HTTP_MTPROTO_ROUTE = /https?:\/\/[^\s"'`<>]+\/apiw(?:_test1|1)(?:[/?#"'`<>\s]|$)/i;
 const PRIVATE_WSS_URL = /wss:\/\/[A-Za-z0-9._:[\]-]+(?:\/[A-Za-z0-9._~!$&'()*+,;=:@%/-]*)?/gi;
 
 function invalidArtifact(message) {

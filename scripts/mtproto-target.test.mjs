@@ -14,6 +14,7 @@ import {join, resolve} from 'node:path';
 import {inspect} from 'node:util';
 import {afterAll, describe, expect, it} from 'vitest';
 import * as mtprotoTarget from './mtproto-target.mjs';
+import {auditPrivateArtifact} from './private-artifact.mjs';
 const {assertRunnableMtprotoTarget, resolveMtprotoTarget} = mtprotoTarget;
 
 const fixturePath = resolve('scripts/fixtures/private-mtproto-public.pem');
@@ -264,6 +265,28 @@ describe('MTProto build target', () => {
       connectionTypes: ['client', 'upload', 'download']
     });
     expect(() => assertRunnableMtprotoTarget(target)).not.toThrow();
+  });
+
+  it('allows a configured WSS endpoint whose path contains apiw1', () => {
+    const endpoint = 'wss://private.example.test:2443/apiw1';
+    const target = resolveMtprotoTarget(privateEnv({MTPROTO_PRIVATE_ENDPOINT: endpoint}));
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'),
+      `const endpoint = ${JSON.stringify(endpoint)};\nconst fingerprint = ${JSON.stringify(target.fingerprint)};\n`);
+
+    expect(() => auditPrivateArtifact(outputDirectory, target)).not.toThrow();
+  });
+
+  it('rejects an HTTP MTProto route in a private artifact', () => {
+    const target = resolveMtprotoTarget(privateEnv());
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), [
+      `const endpoint = ${JSON.stringify(target.endpoint)};`,
+      `const fallback = ${JSON.stringify('https://private.example.test/apiw1')};`,
+      `const fingerprint = ${JSON.stringify(target.fingerprint)};`
+    ].join('\n'));
+
+    expect(() => auditPrivateArtifact(outputDirectory, target)).toThrow(/HTTP MTProto transport/i);
   });
 
   it('emits a self-identifying private Vite artifact with a restrictive CSP', () => {
