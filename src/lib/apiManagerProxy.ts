@@ -28,6 +28,7 @@ import idleController from '@helpers/idleController';
 import ServiceMessagePort from '@lib/serviceWorker/serviceMessagePort';
 import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
 import {makeWorkerURL} from '@helpers/setWorkerProxy';
+import {createPrivateWorkerBlobURL} from '@helpers/createPrivateWorkerBlobURL';
 import ServiceWorkerURL from '../../sw?worker&url';
 import MainWorkerURL from './mainWorker/index.worker.ts?worker&url';
 import setDeepProperty, {joinDeepPath, splitDeepPath} from '@helpers/object/setDeepProperty';
@@ -73,6 +74,7 @@ import SlicedArray, {SliceEnd} from '@helpers/slicedArray';
 import {createHistoryStorageSearchSlicedArray} from '@appManagers/utils/messages/createHistoryStorage';
 import tabId from '@config/tabId';
 import Modes from '@config/modes';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
 import appNavigationController from '@components/appNavigationController';
 import {BroadcastChannelWrapper, createBroadcastChannelWrapper} from './broadcastChannelWrapper';
 import {MainBroadcastChannelEvents, unversionedMainBroadcastChannelName} from '@config/broadcastChannel';
@@ -413,7 +415,9 @@ class ApiManagerProxy extends MTProtoMessagePort {
     this.log('constructor');
 
     if(!import.meta.env.VITE_MTPROTO_SW) {
-      this.registerWorker();
+      this.registerWorker().catch((error) => {
+        this.log.error('failed to register MTProto worker', error);
+      });
     }
 
     this.registerServiceWorker();
@@ -998,7 +1002,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
     });
   }
 
-  private registerWorker() {
+  private async registerWorker() {
     if(import.meta.env.VITE_MTPROTO_SW) {
       return;
     }
@@ -1020,22 +1024,47 @@ class ApiManagerProxy extends MTProtoMessagePort {
     // constructing a URL dynamically here would emit the source .ts file unchanged.
     const workerUrl = makeWorkerURL(MainWorkerURL);
     workerUrl.searchParams.set(THREADED_WORKER_PROTOCOL_QUERY_PARAM, THREADED_WORKER_PROTOCOL_VERSION + '');
-    let worker: SharedWorker | Worker;
-    if(IS_SHARED_WORKER_SUPPORTED) {
-      worker = new SharedWorker(
-        workerUrl,
-        {type: 'module'}
-      );
-      this.closeMTProtoWorker = () => (worker as SharedWorker).port.close();
-    } else {
-      worker = new Worker(
-        workerUrl,
-        {type: 'module'}
-      );
-      this.closeMTProtoWorker = () => (worker as Worker).terminate();
-    }
+    let privateWorkerUrl: string | undefined;
+    try {
+      // The private CSP is a document policy. A same-origin worker script does
+      // not inherit the document policy container, so load the MTProto source
+      // into a blob URL that does inherit it before constructing the worker.
+      if(isPrivateMtprotoTarget()) {
+        privateWorkerUrl = await createPrivateWorkerBlobURL(workerUrl);
+      }
 
-    this.onWorkerFirstMessage(worker);
+      const workerSourceUrl = privateWorkerUrl || workerUrl;
+      let worker: SharedWorker | Worker;
+      if(IS_SHARED_WORKER_SUPPORTED) {
+        worker = new SharedWorker(
+          workerSourceUrl,
+          {type: 'module'}
+        );
+        this.closeMTProtoWorker = () => (worker as SharedWorker).port.close();
+      } else {
+        worker = new Worker(
+          workerSourceUrl,
+          {type: 'module'}
+        );
+        this.closeMTProtoWorker = () => (worker as Worker).terminate();
+      }
+
+      if(privateWorkerUrl) {
+        const closeWorker = this.closeMTProtoWorker;
+        this.closeMTProtoWorker = () => {
+          closeWorker();
+          URL.revokeObjectURL(privateWorkerUrl);
+          privateWorkerUrl = undefined;
+        };
+      }
+
+      this.onWorkerFirstMessage(worker);
+    } catch(error) {
+      if(privateWorkerUrl) {
+        URL.revokeObjectURL(privateWorkerUrl);
+      }
+      throw error;
+    }
   }
 
   private attachWorkerToPort(

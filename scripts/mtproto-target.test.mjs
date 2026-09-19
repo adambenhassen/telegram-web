@@ -289,6 +289,21 @@ describe('MTProto build target', () => {
     expect(() => auditPrivateArtifact(outputDirectory, target)).toThrow(/HTTP MTProto transport/i);
   });
 
+  it.each([
+    ['an interpolated official host and path', 'const route = `wss://${suffix}ws${dcId}${suffix}.web.telegram.org/${path}`;'],
+    ['a concatenated official host and path', "const route = host + '.web.telegram.org/' + path;"]
+  ])('rejects %s in a private artifact', (_name, route) => {
+    const target = resolveMtprotoTarget(privateEnv());
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), [
+      `const endpoint = ${JSON.stringify(target.endpoint)};`,
+      route,
+      `const fingerprint = ${JSON.stringify(target.fingerprint)};`
+    ].join('\n'));
+
+    expect(() => auditPrivateArtifact(outputDirectory, target)).toThrow(/official Telegram MTProto route/i);
+  });
+
   it('emits a self-identifying private Vite artifact with a restrictive CSP', () => {
     const {outputDirectory, result} = buildPrivateTarget();
 
