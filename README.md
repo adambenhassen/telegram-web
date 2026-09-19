@@ -19,6 +19,31 @@ Open http://localhost:8080/ in your browser.
 
 Run `node build` to build the minimized production version of the app. Copy `public` folder contents to your web server.
 
+#### Building a private MTProto artifact
+
+Private artifacts are selected explicitly with these environment variables:
+
+```bash
+MTPROTO_TARGET_MODE=private
+MTPROTO_PRIVATE_ENDPOINT=wss://mtproto.example.test:2443/apiws
+MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE=/path/to/public-key.pem
+```
+
+The endpoint must be a normalized `wss://` URL outside `telegram.org`. The key file must contain exactly one 2048-bit RSA public key with exponent 65537 in either `RSA PUBLIC KEY` (PKCS#1) or `PUBLIC KEY` (SPKI) PEM format. It must not contain private key material.
+
+Build the artifact with the same Vite command used by the project, for example:
+
+```bash
+MTPROTO_TARGET_MODE=private \
+MTPROTO_PRIVATE_ENDPOINT=wss://mtproto.example.test:2443/apiws \
+MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE=/path/to/public-key.pem \
+pnpm exec vite build --outDir dist-private
+```
+
+The build fails closed when target validation or the production-bundle audit fails. The audit rejects Telegram MTProto hostnames and IPs, HTTP MTProto transports, Telegram or test RSA keys, and additional WSS targets. A successful private artifact contains a restrictive CSP and the `mtproto-target.json` sidecar with only `mode`, normalized `endpoint`, RSA `fingerprint`, `sourceCommit`, and the completed artifact `artifactDigest`. The digest excludes the sidecar itself. Verify an existing output with `pnpm run check-bundle -- dist-private`.
+
+Do not edit the sidecar or swap endpoints and keys in an existing output. Build a new artifact with the desired three variables. Leaving these variables unset keeps the ordinary Telegram build unchanged and does not emit a private manifest.
+
 ### Running in docker
 
 #### Developing: 

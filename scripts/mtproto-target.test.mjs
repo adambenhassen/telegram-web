@@ -13,7 +13,8 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {inspect} from 'node:util';
 import {afterAll, describe, expect, it} from 'vitest';
-import {assertRunnableMtprotoTarget, resolveMtprotoTarget} from './mtproto-target.mjs';
+import * as mtprotoTarget from './mtproto-target.mjs';
+const {assertRunnableMtprotoTarget, resolveMtprotoTarget} = mtprotoTarget;
 
 const fixturePath = resolve('scripts/fixtures/private-mtproto-public.pem');
 const fixtureKey = `-----BEGIN RSA PUBLIC KEY-----
@@ -253,21 +254,53 @@ describe('MTProto build target', () => {
     });
   });
 
-  it('stops a validated private target before routing can emit a runnable artifact', () => {
+  it('allows a validated private target to emit a runnable artifact', () => {
     const target = resolveMtprotoTarget(privateEnv());
-    expect(() => assertRunnableMtprotoTarget(target)).toThrow(
-      /validated.*wss:\/\/private\.example\.test:2443\/apiws.*289f8aeb5aa17de3.*no runnable artifact/i
-    );
+    expect(target.routeLock).toEqual({
+      mode: 'private',
+      endpoint: 'wss://private.example.test:2443/apiws',
+      transport: 'websocket',
+      dcIds: [1, 2, 3, 4, 5],
+      connectionTypes: ['client', 'upload', 'download']
+    });
+    expect(() => assertRunnableMtprotoTarget(target)).not.toThrow();
   });
 
-  it('fails a private Vite build before creating its output directory', () => {
+  it('emits a self-identifying private Vite artifact with a restrictive CSP', () => {
     const {outputDirectory, result} = buildPrivateTarget();
 
-    expect(result.status).not.toBe(0);
-    expect(existsSync(outputDirectory)).toBe(false);
-    expect(`${result.stdout}${result.stderr}`).toMatch(/no runnable artifact/i);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(fixturePath);
-  });
+    expect(result.status).toBe(0);
+    expect(existsSync(outputDirectory)).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(outputDirectory, 'mtproto-target.json'), 'utf8'));
+    expect(manifest).toMatchObject({
+      mode: 'private',
+      endpoint: 'wss://private.example.test:2443/apiws',
+      fingerprint: '289f8aeb5aa17de3',
+      sourceCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+      artifactDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/)
+    });
+    const index = readFileSync(join(outputDirectory, 'index.html'), 'utf8').replaceAll('&#39;', "'");
+    expect(index).toContain('Content-Security-Policy');
+    expect(index).toContain("connect-src 'self' wss://private.example.test:2443/apiws");
+    const executable = readdirSync(outputDirectory)
+    .filter((file) => file.endsWith('.js'))
+    .map((file) => readFileSync(join(outputDirectory, file), 'utf8'))
+    .join('\n');
+    expect(executable).toContain('289f8aeb5aa17de3');
+    expect(executable).not.toMatch(/(?:kws[1-5]|apiw(?:_test1|1))\.web\.telegram\.org|\bapiw(?:_test1|1)\b/i);
+    expect(executable).not.toContain('c3b42b026ce86b21');
+    expect(mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toEqual(manifest);
+  }, 60_000);
+
+  it('fails private artifact verification after a completed artifact is changed', () => {
+    const {outputDirectory, result} = buildPrivateTarget();
+    expect(result.status).toBe(0);
+
+    const executable = readdirSync(outputDirectory).find((file) => file.endsWith('.js'));
+    expect(executable).toBeTruthy();
+    writeFileSync(join(outputDirectory, executable), readFileSync(join(outputDirectory, executable)) + '\n// tampered');
+    expect(() => mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toThrow(/digest/i);
+  }, 60_000);
 
   it('does not rewrite existing output when private validation fails', () => {
     const keyPath = writeKey('not a key');

@@ -13,6 +13,8 @@ import type {ValueOrGetter} from '@helpers/solid/readValue';
 import type {MTAppConfig as AppConfig} from '@/appConfig';
 
 declare global {
+  const __MTPROTO_PRIVATE__: boolean;
+
   interface AddEventListenerOptions extends EventListenerOptions {
     once?: boolean;
     passive?: boolean;

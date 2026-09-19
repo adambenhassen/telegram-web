@@ -120,6 +120,7 @@ export async function buildPrivateWorkerEntry({context, entry, outputDirectory, 
     root: ROOT,
     define: {
       __MTPROTO_TARGET__: JSON.stringify(target),
+      __MTPROTO_PRIVATE__: JSON.stringify(target.mode === 'private'),
       'import.meta.env.VITE_MTPROTO_HAS_WS': 'true',
       'import.meta.env.VITE_MTPROTO_HAS_HTTP': 'true',
       'import.meta.env.VITE_MTPROTO_AUTO': 'false',
