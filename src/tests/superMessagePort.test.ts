@@ -157,4 +157,16 @@ describe('SuperMessagePort structured-clone failures', () => {
     await expect(promise).rejects.toBe(error);
     expect(client.awaitingCount).toBe(0);
   });
+
+  test('fails pending and future invokes closed when the port cannot be trusted', async() => {
+    const {client} = createPair();
+    const error = new Error('MTProto worker failed to attach');
+    const pending = client.invoke('call', {kind: 'value', value: 'never delivered'});
+
+    client.failClosed(error);
+
+    await expect(pending).rejects.toBe(error);
+    await expect(client.invoke('call', {kind: 'value', value: 'blocked'})).rejects.toBe(error);
+    expect(client.awaitingCount).toBe(0);
+  });
 });

@@ -5,6 +5,12 @@ const PRIVATE_ENDPOINT = 'MTPROTO_PRIVATE_ENDPOINT';
 const PRIVATE_KEY_FILE = 'MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE';
 const PRIVATE_FIELDS = new Set([PRIVATE_ENDPOINT, PRIVATE_KEY_FILE]);
 const MAX_PUBLIC_KEY_FILE_BYTES = 16 * 1024;
+const PRIVATE_ROUTE_LOCK = {
+  mode: 'private',
+  transport: 'websocket',
+  dcIds: [1, 2, 3, 4, 5],
+  connectionTypes: ['client', 'upload', 'download']
+};
 
 function decodeBase64Url(value) {
   return Buffer.from(value.replaceAll('-', '+').replaceAll('_', '/'), 'base64');
@@ -146,6 +152,15 @@ function readPublicKey(filePath) {
   };
 }
 
+function makePrivateRouteLock(endpoint) {
+  return {
+    ...PRIVATE_ROUTE_LOCK,
+    endpoint,
+    dcIds: [...PRIVATE_ROUTE_LOCK.dcIds],
+    connectionTypes: [...PRIVATE_ROUTE_LOCK.connectionTypes]
+  };
+}
+
 export function resolveMtprotoTarget(env) {
   const privateFieldNames = Object.keys(env).filter((name) => name.startsWith('MTPROTO_PRIVATE_'));
   const unknownField = privateFieldNames.find((name) => !PRIVATE_FIELDS.has(name));
@@ -176,14 +191,28 @@ export function resolveMtprotoTarget(env) {
 
   const endpoint = normalizeEndpoint(endpointValue.trim());
   const {fingerprint, publicKey, publicKeyHex} = readPublicKey(keyFileValue.trim());
-  return {mode: 'private', endpoint, fingerprint, publicKey, publicKeyHex};
+  return {
+    mode: 'private',
+    endpoint,
+    fingerprint,
+    publicKey,
+    publicKeyHex,
+    routeLock: makePrivateRouteLock(endpoint)
+  };
 }
 
 export function assertRunnableMtprotoTarget(target) {
-  if(target.mode === 'private') {
-    throw new Error(
-      `Private MTProto target validated: endpoint=${target.endpoint} fingerprint=${target.fingerprint}. ` +
-      'Private routing is not implemented; no runnable artifact was emitted.'
-    );
+  if(target.mode !== 'private') {
+    return;
+  }
+
+  const routeLock = target.routeLock;
+  if(!routeLock || routeLock.mode !== 'private' || routeLock.endpoint !== target.endpoint ||
+    routeLock.transport !== 'websocket' ||
+    JSON.stringify(routeLock.dcIds) !== JSON.stringify(PRIVATE_ROUTE_LOCK.dcIds) ||
+    JSON.stringify(routeLock.connectionTypes) !== JSON.stringify(PRIVATE_ROUTE_LOCK.connectionTypes)) {
+    throw new Error('Private MTProto target contains inconsistent route-lock metadata');
   }
 }
+
+export {verifyPrivateArtifactManifest} from './private-artifact.mjs';

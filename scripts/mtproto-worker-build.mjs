@@ -35,12 +35,20 @@ const aliases = {
 
 const routeProbe = `
 import {DcConfigurator, constructTelegramWebSocketUrl} from '@lib/mtproto/dcConfigurator';
+import {getMtprotoTarget} from '@config/mtprotoTarget';
+import {assertPrivateMtprotoWebSocketEndpoint} from '@lib/mtproto/endpointPolicy';
 
 const context = typeof ServiceWorkerGlobalScope !== 'undefined' && self instanceof ServiceWorkerGlobalScope ?
   'service-worker' : typeof SharedWorkerGlobalScope !== 'undefined' && self instanceof SharedWorkerGlobalScope ?
     'shared-worker' : 'dedicated-worker';
 globalThis.__mtprotoRoutes ??= [];
 globalThis.__mtprotoDials ??= [];
+let privatePolicyBlockedUnconfigured = false;
+try {
+  assertPrivateMtprotoWebSocketEndpoint(getMtprotoTarget(), 'wss://unconfigured.example.test/apiws');
+} catch {
+  privatePolicyBlockedUnconfigured = true;
+}
 for(const dcId of [1, 2, 3, 4, 5]) {
   for(const connectionType of ['client', 'upload', 'download']) {
     for(const premium of [false, true]) {
@@ -53,6 +61,11 @@ for(const dcId of [1, 2, 3, 4, 5]) {
         premium,
         route: constructTelegramWebSocketUrl(dcId, connectionType, premium),
         dial: transport.url,
+        privatePolicyAllowsConfigured: (() => {
+          assertPrivateMtprotoWebSocketEndpoint(getMtprotoTarget(), transport.url);
+          return true;
+        })(),
+        privatePolicyBlockedUnconfigured,
         dials: globalThis.__mtprotoDials.slice(dialStart)
       });
       transport.destroy();
@@ -120,6 +133,7 @@ export async function buildPrivateWorkerEntry({context, entry, outputDirectory, 
     root: ROOT,
     define: {
       __MTPROTO_TARGET__: JSON.stringify(target),
+      __MTPROTO_PRIVATE__: JSON.stringify(target.mode === 'private'),
       'import.meta.env.VITE_MTPROTO_HAS_WS': 'true',
       'import.meta.env.VITE_MTPROTO_HAS_HTTP': 'true',
       'import.meta.env.VITE_MTPROTO_AUTO': 'false',

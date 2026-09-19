@@ -28,6 +28,7 @@ import idleController from '@helpers/idleController';
 import ServiceMessagePort from '@lib/serviceWorker/serviceMessagePort';
 import deferredPromise, {CancellablePromise} from '@helpers/cancellablePromise';
 import {makeWorkerURL} from '@helpers/setWorkerProxy';
+import {createPrivateWorkerBlobURL, rewritePrivateWorkerImports} from '@helpers/createPrivateWorkerBlobURL';
 import ServiceWorkerURL from '../../sw?worker&url';
 import MainWorkerURL from './mainWorker/index.worker.ts?worker&url';
 import setDeepProperty, {joinDeepPath, splitDeepPath} from '@helpers/object/setDeepProperty';
@@ -73,6 +74,9 @@ import SlicedArray, {SliceEnd} from '@helpers/slicedArray';
 import {createHistoryStorageSearchSlicedArray} from '@appManagers/utils/messages/createHistoryStorage';
 import tabId from '@config/tabId';
 import Modes from '@config/modes';
+import {isPrivateMtprotoTarget} from '@config/mtprotoTarget';
+import {waitForMtprotoWorkerReady} from '@helpers/mtprotoWorkerReady';
+import {toast} from '@components/toast';
 import appNavigationController from '@components/appNavigationController';
 import {BroadcastChannelWrapper, createBroadcastChannelWrapper} from './broadcastChannelWrapper';
 import {MainBroadcastChannelEvents, unversionedMainBroadcastChannelName} from '@config/broadcastChannel';
@@ -197,6 +201,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
   private appConfig: MaybePromise<MTAppConfig>;
 
   private closeMTProtoWorker = noop;
+  private mtprotoWorkerFailure?: Error;
 
   private intervals: Map<number, () => any>;
 
@@ -413,7 +418,9 @@ class ApiManagerProxy extends MTProtoMessagePort {
     this.log('constructor');
 
     if(!import.meta.env.VITE_MTPROTO_SW) {
-      this.registerWorker();
+      this.registerWorker().catch((error) => {
+        this.handleMtprotoWorkerFailure(error);
+      });
     }
 
     this.registerServiceWorker();
@@ -826,7 +833,11 @@ class ApiManagerProxy extends MTProtoMessagePort {
     }).catch((err) => {
       this.log.error('SW registration failed!', err);
 
-      this.invokeVoid('serviceWorkerOnline', false);
+      if(isPrivateMtprotoTarget()) {
+        this.handleMtprotoWorkerFailure(err);
+      } else {
+        this.invokeVoid('serviceWorkerOnline', false);
+      }
     });
   }
 
@@ -921,7 +932,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
         const pathnameSplitted = location.pathname.split('/');
         pathnameSplitted[pathnameSplitted.length - 1] = '';
         const pre = location.origin + pathnameSplitted.join('/');
-        text = text.replace(/(import (?:.+? from )?['"])\//g, '$1' + pre);
+        text = rewritePrivateWorkerImports(text, pre);
 
         const blob = new Blob([text], {type: 'application/javascript'});
         return blob;
@@ -998,7 +1009,7 @@ class ApiManagerProxy extends MTProtoMessagePort {
     });
   }
 
-  private registerWorker() {
+  private async registerWorker() {
     if(import.meta.env.VITE_MTPROTO_SW) {
       return;
     }
@@ -1008,11 +1019,16 @@ class ApiManagerProxy extends MTProtoMessagePort {
       // worker module's listeners run in the main thread under the same call
       // stack as the proxy. start-preview / dev only — multi-tab dedup is lost.
       const channel = new MessageChannel();
-      this.attachPort(channel.port1);
-      this.closeMTProtoWorker = () => channel.port1.close();
-      import('./mainWorker/index.worker').then((mod) => {
-        mod.connectInProcessTab(channel.port2);
-      });
+      this.closeMTProtoWorker = () => {
+        channel.port1.close();
+        channel.port2.close();
+      };
+
+      const mod = await import('./mainWorker/index.worker');
+      const ready = waitForMtprotoWorkerReady(channel.port1 as any);
+      mod.connectInProcessTab(channel.port2);
+      await ready;
+      this.onWorkerFirstMessage(channel.port1);
       return;
     }
 
@@ -1020,22 +1036,66 @@ class ApiManagerProxy extends MTProtoMessagePort {
     // constructing a URL dynamically here would emit the source .ts file unchanged.
     const workerUrl = makeWorkerURL(MainWorkerURL);
     workerUrl.searchParams.set(THREADED_WORKER_PROTOCOL_QUERY_PARAM, THREADED_WORKER_PROTOCOL_VERSION + '');
-    let worker: SharedWorker | Worker;
-    if(IS_SHARED_WORKER_SUPPORTED) {
-      worker = new SharedWorker(
-        workerUrl,
-        {type: 'module'}
-      );
-      this.closeMTProtoWorker = () => (worker as SharedWorker).port.close();
-    } else {
-      worker = new Worker(
-        workerUrl,
-        {type: 'module'}
-      );
-      this.closeMTProtoWorker = () => (worker as Worker).terminate();
+    let privateWorkerUrl: string | undefined;
+    try {
+      // The private CSP is a document policy. A same-origin worker script does
+      // not inherit the document policy container, so load the MTProto source
+      // into a blob URL that does inherit it before constructing the worker.
+      if(isPrivateMtprotoTarget()) {
+        privateWorkerUrl = await createPrivateWorkerBlobURL(workerUrl);
+      }
+
+      const workerSourceUrl = privateWorkerUrl || workerUrl;
+      let worker: SharedWorker | Worker;
+      if(IS_SHARED_WORKER_SUPPORTED) {
+        worker = new SharedWorker(
+          workerSourceUrl,
+          {type: 'module'}
+        );
+        this.closeMTProtoWorker = () => (worker as SharedWorker).port.close();
+      } else {
+        worker = new Worker(
+          workerSourceUrl,
+          {type: 'module'}
+        );
+        this.closeMTProtoWorker = () => (worker as Worker).terminate();
+      }
+
+      if(privateWorkerUrl) {
+        const closeWorker = this.closeMTProtoWorker;
+        this.closeMTProtoWorker = () => {
+          closeWorker();
+          URL.revokeObjectURL(privateWorkerUrl);
+          privateWorkerUrl = undefined;
+        };
+      }
+
+      await waitForMtprotoWorkerReady(worker as any);
+      this.onWorkerFirstMessage(worker);
+    } catch(error) {
+      this.closeMTProtoWorker();
+      if(privateWorkerUrl) {
+        URL.revokeObjectURL(privateWorkerUrl);
+        privateWorkerUrl = undefined;
+      }
+      throw error;
+    }
+  }
+
+  private handleMtprotoWorkerFailure(error: unknown) {
+    this.log.error('failed to register MTProto worker', error);
+
+    if(!isPrivateMtprotoTarget()) {
+      return;
     }
 
-    this.onWorkerFirstMessage(worker);
+    if(this.mtprotoWorkerFailure) {
+      return;
+    }
+
+    this.mtprotoWorkerFailure = this.failClosed(error);
+    this.closeMTProtoWorker();
+    toast('Private MTProto worker failed to start. Reload the page to try again.', undefined, 10000);
   }
 
   private attachWorkerToPort(
@@ -1048,6 +1108,15 @@ class ApiManagerProxy extends MTProtoMessagePort {
 
     worker.addEventListener('error', (err) => {
       this.log.error(type, 'worker error', err);
+      if(isPrivateMtprotoTarget()) {
+        this.handleMtprotoWorkerFailure(err);
+      }
+    });
+    worker.addEventListener('messageerror', (err) => {
+      this.log.error(type, 'worker message error', err);
+      if(isPrivateMtprotoTarget()) {
+        this.handleMtprotoWorkerFailure(err);
+      }
     });
   }
 
@@ -1057,6 +1126,14 @@ class ApiManagerProxy extends MTProtoMessagePort {
     // this.worker = worker;
     if(import.meta.env.VITE_MTPROTO_SW) {
       this.attachSendPort(worker);
+      worker.addEventListener?.('error', (err: ErrorEvent) => {
+        this.log.error('mtproto worker error', err);
+        if(isPrivateMtprotoTarget()) this.handleMtprotoWorkerFailure(err);
+      });
+      worker.addEventListener?.('messageerror', (err: MessageEvent) => {
+        this.log.error('mtproto worker message error', err);
+        if(isPrivateMtprotoTarget()) this.handleMtprotoWorkerFailure(err);
+      });
     } else {
       this.attachWorkerToPort(worker, this, 'mtproto');
     }

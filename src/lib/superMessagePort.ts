@@ -177,6 +177,7 @@ class SuperMessagePort<
   protected log: ReturnType<typeof logger>;
   protected debug: boolean;
   protected releasingPending: boolean;
+  protected failure?: Error;
 
   protected processTaskMap: TaskMap;
 
@@ -246,16 +247,31 @@ class SuperMessagePort<
   // }
 
   public attachPort(port: MessageEventSource) {
+    if(this.failure) {
+      (port as MessagePort).close?.();
+      return;
+    }
+
     this.attachListenPort(port);
     this.attachSendPort(port);
   }
 
   public attachListenPort(port: ListenPort) {
+    if(this.failure) {
+      (port as MessagePort).close?.();
+      return;
+    }
+
     this.listenPorts.push(port);
     port.addEventListener('message', this.onMessage as any);
   }
 
   public attachSendPort(port: SendPort) {
+    if(this.failure) {
+      (port as MessagePort).close?.();
+      return;
+    }
+
     this.log.warn('attaching send port');
 
     (port as MessagePort).start?.();
@@ -285,6 +301,28 @@ class SuperMessagePort<
     }
 
     this.releasePending();
+  }
+
+  public failClosed(error: unknown) {
+    if(this.failure) return this.failure;
+
+    this.failure = error instanceof Error ? error : new Error(String(error));
+    this.pending.clear();
+
+    for(const id in this.awaiting) {
+      this.awaiting[id].reject(this.failure);
+      delete this.awaiting[id];
+    }
+
+    const ports = new Set([...this.listenPorts, ...this.sendPorts]);
+    ports.forEach((port) => {
+      (port as any).removeEventListener?.('message', this.onMessage as any);
+      (port as MessagePort).close?.();
+    });
+    this.listenPorts.length = 0;
+    this.sendPorts.length = 0;
+
+    return this.failure;
   }
 
   public resendLockTask(port: SendPort) {
@@ -754,6 +792,8 @@ class SuperMessagePort<
   }
 
   public invokeVoid<T extends keyof Send>(type: T, payload: Parameters<Send[T]>[0], port?: SendPort, transfer?: Transferable[]) {
+    if(this.failure) return;
+
     const task = this.createInvokeTask(type as string, payload, undefined, true, transfer);
     this.pushTask(task, port);
   }
@@ -771,6 +811,8 @@ class SuperMessagePort<
   public invoke<T extends keyof Send>(type: T, payload: Parameters<Send[T]>[0], withAck?: false, port?: SendPort, transfer?: Transferable[], timeout?: number): Promise<Awaited<ReturnType<Send[T]>>>;
   public invoke<T extends keyof Send>(type: T, payload: Parameters<Send[T]>[0], withAck?: true, port?: SendPort, transfer?: Transferable[], timeout?: number): Promise<AckedResult<Awaited<ReturnType<Send[T]>>>>;
   public invoke<T extends keyof Send>(type: T, payload: Parameters<Send[T]>[0], withAck?: boolean, port?: SendPort, transfer?: Transferable[], timeout?: number) {
+    if(this.failure) return Promise.reject(this.failure);
+
     this.debug && this.log.debug('start', type, payload);
 
     let task: InvokeTask;

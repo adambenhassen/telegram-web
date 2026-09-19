@@ -13,6 +13,7 @@ import {watchLangFile} from './watch-lang.js';
 import devChecks from './scripts/dev-checks.mjs';
 import settingsSearchPlugin from './scripts/settings-search-plugin.mjs';
 import {assertRunnableMtprotoTarget, resolveMtprotoTarget} from './scripts/mtproto-target.mjs';
+import {createPrivateArtifactPlugin} from './scripts/private-artifact.mjs';
 import path from 'path';
 
 const mtprotoTarget = resolveMtprotoTarget(process.env);
@@ -144,7 +145,8 @@ if(USE_OWN_SOLID) {
 
 export default defineConfig({
   define: {
-    __MTPROTO_TARGET__: JSON.stringify(mtprotoTarget)
+    __MTPROTO_TARGET__: JSON.stringify(mtprotoTarget),
+    __MTPROTO_PRIVATE__: JSON.stringify(mtprotoTarget.mode === 'private')
   },
   plugins: [
     // devtools({
@@ -153,6 +155,7 @@ export default defineConfig({
     // }),
     process.env.VITEST || process.env.TWEB_PREVIEW ? undefined : devChecks(rootDir),
     process.env.VITEST ? undefined : settingsSearchPlugin(rootDir),
+    mtprotoTarget.mode === 'private' ? createPrivateArtifactPlugin(rootDir, mtprotoTarget) : undefined,
     solidPlugin(),
     handlebarsPlugin as any,
     USE_SELF_SIGNED_CERTS ? basicSsl(BASIC_SSL_CONFIG) : undefined,

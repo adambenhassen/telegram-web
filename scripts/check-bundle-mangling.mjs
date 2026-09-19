@@ -23,11 +23,13 @@
  *    author none of them, so the count must stay zero.
  *
  * Usage: node scripts/check-bundle-mangling.mjs [dist]
+ * Set MTPROTO_TARGET_MODE=private to require the private artifact sidecar.
  */
 
 import fs from 'fs';
 import path from 'path';
 import {parseAst} from 'vite';
+import {verifyPrivateArtifactManifest} from './private-artifact.mjs';
 
 const B64 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 const B64_INDEX = new Map([...B64].map((char, index) => [char, index]));
@@ -200,7 +202,13 @@ function checkChunk(dir, file) {
   return offenders;
 }
 
-const dir = process.argv[2] || 'dist';
+const dir = process.argv[2] === '--' ? (process.argv[3] || 'dist') : (process.argv[2] || 'dist');
+const privateMode = process.env.MTPROTO_TARGET_MODE === 'private';
+if(privateMode || fs.existsSync(path.join(dir, 'mtproto-target.json'))) {
+  verifyPrivateArtifactManifest(dir);
+  console.log('verified private MTProto artifact manifest and route audit');
+}
+
 const files = fs.readdirSync(dir)
 .filter((file) => file.endsWith('.js') && fs.existsSync(path.join(dir, file + '.map')));
 

@@ -3,6 +3,8 @@ import Modes from '@config/modes';
 import EventListenerBase from '@helpers/eventListenerBase';
 import {MTConnection} from '@lib/mtproto/transports/transport';
 import ctx from '@environment/ctx';
+import {getMtprotoTarget} from '@config/mtprotoTarget';
+import {assertPrivateMtprotoWebSocketEndpoint} from '@lib/mtproto/endpointPolicy';
 
 const TEST_NO_WEBSOCKET = false;
 
@@ -25,6 +27,10 @@ export default class Socket extends EventListenerBase<{
     if(TEST_NO_WEBSOCKET) {
       this.url = url = 'wss://localhost:8081';
     }
+
+    // Service workers do not inherit the document CSP, so enforce the same
+    // endpoint policy at the actual WebSocket dial boundary.
+    assertPrivateMtprotoWebSocketEndpoint(getMtprotoTarget(), url);
 
     let logTypes = LogTypes.Error | LogTypes.Log;
     if(this.debug) logTypes |= LogTypes.Debug;

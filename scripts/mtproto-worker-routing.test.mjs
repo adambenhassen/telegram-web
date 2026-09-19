@@ -16,6 +16,9 @@ const privateTarget = resolveMtprotoTarget({
   MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: resolve('scripts/fixtures/private-mtproto-public.pem')
 });
 const temporaryDirectories = [];
+// Three serial Vite worker builds are intentional coverage; allow a bounded
+// integration budget when the full suite is compiling concurrently.
+const PRIVATE_WORKER_ROUTING_TIMEOUT_MS = 60_000;
 
 afterAll(() => {
   for(const directory of temporaryDirectories) {
@@ -45,6 +48,8 @@ describe('private MTProto worker routing', () => {
         route.context === context &&
         route.route === PRIVATE_ENDPOINT &&
         route.dial === PRIVATE_ENDPOINT &&
+        route.privatePolicyAllowsConfigured === true &&
+        route.privatePolicyBlockedUnconfigured === true &&
         Array.isArray(route.dials) &&
         route.dials.length === 1 &&
         route.dials.every((dial) =>
@@ -54,5 +59,5 @@ describe('private MTProto worker routing', () => {
       )).toBe(true);
       expect(output.bundle).toContain(PRIVATE_ENDPOINT);
     }
-  });
+  }, PRIVATE_WORKER_ROUTING_TIMEOUT_MS);
 });

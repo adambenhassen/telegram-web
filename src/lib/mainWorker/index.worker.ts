@@ -28,6 +28,7 @@ import {ApiManager} from '@appManagers/apiManager';
 import {useAutoLock} from '@lib/mainWorker/useAutoLock';
 import pushSingleManager from '@appManagers/pushSingleManager';
 import {createBroadcastChannelWrapper} from '@lib/broadcastChannelWrapper';
+import {notifyMtprotoWorkerReady} from '@helpers/mtprotoWorkerReady';
 import {MainBroadcastChannelEvents, unversionedMainBroadcastChannelName} from '@config/broadcastChannel';
 import objectUrlRegistry from '@lib/mainWorker/objectUrlRegistry';
 import SharedObjectUrlCache, {getSharedObjectURLCacheStats, resetSharedObjectURLCaches} from '@lib/mainWorker/sharedObjectUrlCache';
@@ -389,6 +390,7 @@ appTabsManager.onTabStateChange = () => {
 };
 
 const onTabConnect = (source: MessageEventSource) => {
+  notifyMtprotoWorkerReady(source);
   objectUrlRegistry.registerSource(source);
   appTabsManager.addTab(source);
   if(isFirst) {

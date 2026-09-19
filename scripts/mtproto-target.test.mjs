@@ -12,8 +12,11 @@ import {
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {inspect} from 'node:util';
-import {afterAll, describe, expect, it} from 'vitest';
-import {assertRunnableMtprotoTarget, resolveMtprotoTarget} from './mtproto-target.mjs';
+import {afterAll, describe, expect, it, vi} from 'vitest';
+import * as mtprotoTarget from './mtproto-target.mjs';
+import {auditPrivateArtifact, writePrivateArtifactManifest} from './private-artifact.mjs';
+import {createPrivateWorkerBlobURL} from '../src/helpers/createPrivateWorkerBlobURL';
+const {assertRunnableMtprotoTarget, resolveMtprotoTarget} = mtprotoTarget;
 
 const fixturePath = resolve('scripts/fixtures/private-mtproto-public.pem');
 const fixtureKey = `-----BEGIN RSA PUBLIC KEY-----
@@ -74,6 +77,18 @@ function buildPrivateTarget(overrides = {}, outputDirectory = join(temporaryDire
     env: {...env, ...privateEnv(overrides)}
   });
   return {outputDirectory, result};
+}
+
+function findEmittedWorkers(directory, workers = []) {
+  for(const entry of readdirSync(directory, {withFileTypes: true})) {
+    const path = join(directory, entry.name);
+    if(entry.isDirectory()) {
+      findEmittedWorkers(path, workers);
+    } else if(/^index\.worker-[^/]+\.js$/.test(entry.name)) {
+      workers.push(path);
+    }
+  }
+  return workers;
 }
 
 describe('MTProto build target', () => {
@@ -253,20 +268,164 @@ describe('MTProto build target', () => {
     });
   });
 
-  it('stops a validated private target before routing can emit a runnable artifact', () => {
+  it('allows a validated private target to emit a runnable artifact', () => {
     const target = resolveMtprotoTarget(privateEnv());
-    expect(() => assertRunnableMtprotoTarget(target)).toThrow(
-      /validated.*wss:\/\/private\.example\.test:2443\/apiws.*289f8aeb5aa17de3.*no runnable artifact/i
-    );
+    expect(target.routeLock).toEqual({
+      mode: 'private',
+      endpoint: 'wss://private.example.test:2443/apiws',
+      transport: 'websocket',
+      dcIds: [1, 2, 3, 4, 5],
+      connectionTypes: ['client', 'upload', 'download']
+    });
+    expect(() => assertRunnableMtprotoTarget(target)).not.toThrow();
   });
 
-  it('fails a private Vite build before creating its output directory', () => {
+  it('allows a configured WSS endpoint whose path contains apiw1', () => {
+    const endpoint = 'wss://private.example.test:2443/apiw1';
+    const target = resolveMtprotoTarget(privateEnv({MTPROTO_PRIVATE_ENDPOINT: endpoint}));
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'),
+      `const endpoint = ${JSON.stringify(endpoint)};\nconst fingerprint = ${JSON.stringify(target.fingerprint)};\n`);
+
+    expect(() => auditPrivateArtifact(outputDirectory, target)).not.toThrow();
+  });
+
+  it('rejects an HTTP MTProto route in a private artifact', () => {
+    const target = resolveMtprotoTarget(privateEnv());
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), [
+      `const endpoint = ${JSON.stringify(target.endpoint)};`,
+      `const fallback = ${JSON.stringify('https://private.example.test/apiw1')};`,
+      `const fingerprint = ${JSON.stringify(target.fingerprint)};`
+    ].join('\n'));
+
+    expect(() => auditPrivateArtifact(outputDirectory, target)).toThrow(/HTTP MTProto transport/i);
+  });
+
+  it.each([
+    ['an interpolated official host and path', 'const route = `wss://${suffix}ws${dcId}${suffix}.web.telegram.org/${path}`;'],
+    ['a concatenated official host and path', "const route = host + '.web.telegram.org/' + path;"]
+  ])('rejects %s in a private artifact', (_name, route) => {
+    const target = resolveMtprotoTarget(privateEnv());
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), [
+      `const endpoint = ${JSON.stringify(target.endpoint)};`,
+      route,
+      `const fingerprint = ${JSON.stringify(target.fingerprint)};`
+    ].join('\n'));
+
+    expect(() => auditPrivateArtifact(outputDirectory, target)).toThrow(/official Telegram MTProto route/i);
+  });
+
+  it('emits a self-identifying private Vite artifact with a blob-safe worker and restrictive CSP', async() => {
     const {outputDirectory, result} = buildPrivateTarget();
 
-    expect(result.status).not.toBe(0);
-    expect(existsSync(outputDirectory)).toBe(false);
-    expect(`${result.stdout}${result.stderr}`).toMatch(/no runnable artifact/i);
-    expect(`${result.stdout}${result.stderr}`).not.toContain(fixturePath);
+    expect(result.status).toBe(0);
+    expect(existsSync(outputDirectory)).toBe(true);
+    const manifest = JSON.parse(readFileSync(join(outputDirectory, 'mtproto-target.json'), 'utf8'));
+    expect(manifest).toMatchObject({
+      mode: 'private',
+      endpoint: 'wss://private.example.test:2443/apiws',
+      fingerprint: '289f8aeb5aa17de3',
+      sourceCommit: expect.stringMatching(/^[0-9a-f]{40}$/),
+      artifactDigest: expect.stringMatching(/^sha256:[0-9a-f]{64}$/)
+    });
+    const index = readFileSync(join(outputDirectory, 'index.html'), 'utf8').replaceAll('&#39;', "'");
+    expect(index).toContain('Content-Security-Policy');
+    expect(index).toContain("connect-src 'self' wss://private.example.test:2443/apiws");
+    const executable = readdirSync(outputDirectory)
+    .filter((file) => file.endsWith('.js'))
+    .map((file) => readFileSync(join(outputDirectory, file), 'utf8'))
+    .join('\n');
+    expect(executable).toContain('289f8aeb5aa17de3');
+    expect(executable).not.toMatch(/(?:kws[1-5]|apiw(?:_test1|1))\.web\.telegram\.org|\bapiw(?:_test1|1)\b/i);
+    expect(executable).not.toContain('c3b42b026ce86b21');
+    expect(mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toEqual(manifest);
+
+    const workerPaths = findEmittedWorkers(outputDirectory);
+    expect(workerPaths.length).toBeGreaterThan(0);
+    const relativeImportPattern = /(?:\bfrom\s*|\bimport\s*)(["'])(\.{1,2}\/[^"']+)\1/;
+    const relativeDynamicImportPattern = /import\s*\(\s*(["'\x60])(\.{1,2}\/[^"'\x60]+)\1\s*\)/;
+    const workerPath = workerPaths.find((path) =>
+      relativeDynamicImportPattern.test(readFileSync(path, 'utf8'))
+    ) || workerPaths.find((path) =>
+      relativeImportPattern.test(readFileSync(path, 'utf8'))
+    ) || workerPaths[0];
+    const workerSource = readFileSync(workerPath, 'utf8');
+    const relativeImport = workerSource.match(relativeImportPattern);
+    const relativeDynamicImport = workerSource.match(relativeDynamicImportPattern);
+
+    if(relativeImport || relativeDynamicImport) {
+      const originalFetch = globalThis.fetch;
+      const originalCreateObjectURL = URL.createObjectURL;
+      const createObjectURL = vi.fn(() => 'blob:private-mtproto-worker');
+      vi.stubGlobal('fetch', vi.fn(async() => ({
+        ok: true,
+        text: async() => workerSource
+      })));
+      Object.defineProperty(URL, 'createObjectURL', {
+        configurable: true,
+        value: createObjectURL
+      });
+
+      try {
+        await expect(createPrivateWorkerBlobURL(workerPath)).resolves.toBe('blob:private-mtproto-worker');
+        const blob = createObjectURL.mock.calls[0][0];
+        const blobSource = await blob.text();
+        expect(blobSource).not.toMatch(relativeImportPattern);
+        expect(blobSource).not.toMatch(relativeDynamicImportPattern);
+        const firstRelativeSpecifier = relativeDynamicImport?.[2] || relativeImport?.[2];
+        expect(blobSource).toContain(new URL(firstRelativeSpecifier, location.href).href);
+      } finally {
+        vi.stubGlobal('fetch', originalFetch);
+        if(originalCreateObjectURL) {
+          Object.defineProperty(URL, 'createObjectURL', {
+            configurable: true,
+            value: originalCreateObjectURL
+          });
+        } else {
+          delete URL.createObjectURL;
+        }
+      }
+    }
+  }, 60_000);
+
+  it('fails private bundle auditing when the sidecar is missing', () => {
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), 'const client = 1;\n');
+    writeFileSync(join(outputDirectory, 'client.js.map'), JSON.stringify({
+      version: 3,
+      names: [],
+      sources: [],
+      mappings: ''
+    }));
+
+    const audit = spawnSync(process.execPath, [
+      resolve('scripts/check-bundle-mangling.mjs'),
+      outputDirectory
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {...process.env, MTPROTO_TARGET_MODE: 'private'}
+    });
+
+    expect(audit.status).not.toBe(0);
+    expect(`${audit.stdout}${audit.stderr}`).toMatch(/private artifact manifest is missing/i);
+  }, 60_000);
+
+  it('fails private artifact verification after a completed artifact is changed', () => {
+    const target = resolveMtprotoTarget(privateEnv());
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), [
+      'const endpoint = ' + JSON.stringify(target.endpoint) + ';',
+      'const fingerprint = ' + JSON.stringify(target.fingerprint) + ';'
+    ].join('\n'));
+    writePrivateArtifactManifest(outputDirectory, target, process.cwd());
+
+    const executable = readdirSync(outputDirectory).find((file) => file.endsWith('.js'));
+    expect(executable).toBeTruthy();
+    writeFileSync(join(outputDirectory, executable), readFileSync(join(outputDirectory, executable)) + '\n// tampered');
+    expect(() => mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toThrow(/digest/i);
   });
 
   it('does not rewrite existing output when private validation fails', () => {

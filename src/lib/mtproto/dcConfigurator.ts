@@ -95,7 +95,7 @@ export function resolveMtprotoRoute({
 export function constructTelegramWebSocketUrl(_dcId: DcId, connectionType: ConnectionType, premium?: boolean) {
   const dcId = assertValidDcId(_dcId);
 
-  if(isPrivateMtprotoTarget()) {
+  if(__MTPROTO_PRIVATE__ || isPrivateMtprotoTarget()) {
     return resolveMtprotoRoute({
       target: getMtprotoTarget(),
       dcId,
@@ -105,21 +105,23 @@ export function constructTelegramWebSocketUrl(_dcId: DcId, connectionType: Conne
     }).endpoint;
   }
 
-  if(!import.meta.env.VITE_MTPROTO_HAS_WS) {
-    return;
+  if(!__MTPROTO_PRIVATE__) {
+    if(!import.meta.env.VITE_MTPROTO_HAS_WS) {
+      return;
+    }
+
+    const suffix = getTelegramConnectionSuffix(connectionType);
+    const path = connectionType !== 'client' ? 'apiws' + TEST_SUFFIX + (premium ? PREMIUM_SUFFIX : '') : ('apiws' + TEST_SUFFIX);
+    const chosenServer = `wss://${App.suffix.toLowerCase()}ws${dcId}${suffix}.web.telegram.org/${path}`;
+
+    return chosenServer;
   }
-
-  const suffix = getTelegramConnectionSuffix(connectionType);
-  const path = connectionType !== 'client' ? 'apiws' + TEST_SUFFIX + (premium ? PREMIUM_SUFFIX : '') : ('apiws' + TEST_SUFFIX);
-  const chosenServer = `wss://${App.suffix.toLowerCase()}ws${dcId}${suffix}.web.telegram.org/${path}`;
-
-  return chosenServer;
 }
 
 export class DcConfigurator {
-  private sslSubdomains = ['pluto', 'venus', 'aurora', 'vesta', 'flora'];
+  private sslSubdomains = __MTPROTO_PRIVATE__ ? [] : ['pluto', 'venus', 'aurora', 'vesta', 'flora'];
 
-  private dcOptions = Modes.test ?
+  private dcOptions = __MTPROTO_PRIVATE__ ? [] : Modes.test ?
     [
       {id: 1, host: '149.154.175.10',  port: 80},
       {id: 2, host: '149.154.167.40',  port: 80},
@@ -159,30 +161,32 @@ export class DcConfigurator {
   };
 
   private transportHTTP = (dcId: DcId, connectionType: ConnectionType, premium?: boolean) => {
-    if(isPrivateMtprotoTarget()) {
+    if(__MTPROTO_PRIVATE__ || isPrivateMtprotoTarget()) {
       throw new Error('[MT] private MTProto target does not permit HTTP transport');
     }
-    if(!import.meta.env.VITE_MTPROTO_HAS_HTTP) {
-      return;
-    }
+    if(!__MTPROTO_PRIVATE__) {
+      if(!import.meta.env.VITE_MTPROTO_HAS_HTTP) {
+        return;
+      }
 
-    let chosenServer: string;
-    if(Modes.ssl || !Modes.http) {
-      const suffix = getTelegramConnectionSuffix(connectionType);
-      const subdomain = this.sslSubdomains[dcId - 1] + suffix;
-      const path = Modes.test ? 'apiw_test1' : 'apiw1';
-      chosenServer = 'https://' + subdomain + '.web.telegram.org/' + path;
-    } else {
-      for(const dcOption of this.dcOptions) {
-        if(dcOption.id === dcId) {
-          chosenServer = 'http://' + dcOption.host + (dcOption.port !== 80 ? ':' + dcOption.port : '') + '/apiw1';
-          break;
+      let chosenServer: string;
+      if(Modes.ssl || !Modes.http) {
+        const suffix = getTelegramConnectionSuffix(connectionType);
+        const subdomain = this.sslSubdomains[dcId - 1] + suffix;
+        const path = Modes.test ? 'apiw_test1' : 'apiw1';
+        chosenServer = 'https://' + subdomain + '.web.telegram.org/' + path;
+      } else {
+        for(const dcOption of this.dcOptions) {
+          if(dcOption.id === dcId) {
+            chosenServer = 'http://' + dcOption.host + (dcOption.port !== 80 ? ':' + dcOption.port : '') + '/apiw1';
+            break;
+          }
         }
       }
-    }
 
-    const logSuffix = connectionType === 'upload' ? '-U' : connectionType === 'download' ? '-D' : '';
-    return new HTTP(dcId, chosenServer, logSuffix);
+      const logSuffix = connectionType === 'upload' ? '-U' : connectionType === 'download' ? '-D' : '';
+      return new HTTP(dcId, chosenServer, logSuffix);
+    }
   };
 
   public chooseServer(
@@ -198,7 +202,7 @@ export class DcConfigurator {
 
     dcId = assertValidDcId(dcId);
 
-    if(isPrivateMtprotoTarget() && transportType !== 'websocket') {
+    if((__MTPROTO_PRIVATE__ || isPrivateMtprotoTarget()) && transportType !== 'websocket') {
       throw new Error('[MT] private MTProto target only permits websocket transport');
     }
 
@@ -221,9 +225,9 @@ export class DcConfigurator {
     if(!transports.length || !reuse/*  || (upload && transports.length < 1) */) {
       let transport: MTTransport;
 
-      if(isPrivateMtprotoTarget()) {
+      if(__MTPROTO_PRIVATE__ || isPrivateMtprotoTarget()) {
         transport = this.transportSocket(dcId, connectionType, premium);
-      } else if(import.meta.env.VITE_MTPROTO_HAS_WS && import.meta.env.VITE_MTPROTO_HAS_HTTP) {
+      } else if(!__MTPROTO_PRIVATE__ && import.meta.env.VITE_MTPROTO_HAS_WS && import.meta.env.VITE_MTPROTO_HAS_HTTP) {
         transport = (transportType === 'websocket' ? this.transportSocket : this.transportHTTP)(dcId, connectionType, premium);
       } else if(!import.meta.env.VITE_MTPROTO_HTTP) {
         transport = this.transportSocket(dcId, connectionType, premium);

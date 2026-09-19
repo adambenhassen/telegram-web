@@ -10,11 +10,18 @@ const PRIVATE_ENDPOINT = 'wss://private.example.test:2443/apiws';
 const privateTarget = {
   mode: 'private' as const,
   endpoint: PRIVATE_ENDPOINT,
-  fingerprint: '289f8aeb5aa17de3',
-  publicKey: 'embedded rsa public key',
+  fingerprint: 'c94b4d28b2d215b8',
+  publicKey: '-----BEGIN RSA PUBLIC KEY-----\nAA==\n-----END RSA PUBLIC KEY-----',
   publicKeyHex: {
     modulus: 'a'.repeat(512),
     exponent: '010001'
+  },
+  routeLock: {
+    mode: 'private' as const,
+    endpoint: PRIVATE_ENDPOINT,
+    transport: 'websocket' as const,
+    dcIds: [1, 2, 3, 4, 5] as const,
+    connectionTypes: ['client', 'upload', 'download'] as const
   }
 };
 const embeddedPrivateTarget = validateMtprotoTarget(privateTarget);
@@ -87,6 +94,7 @@ describe('private MTProto routing', () => {
     {...privateTarget, endpoint: 'wss://telegram.org/apiws'},
     {...privateTarget, endpoint: ''},
     {...privateTarget, fingerprint: ''},
+    {...privateTarget, fingerprint: '0000000000000000'},
     {...privateTarget, publicKey: ''}
   ])('fails closed for inconsistent embedded metadata', (target) => {
     expect(() => resolveMtprotoRoute({
@@ -95,6 +103,19 @@ describe('private MTProto routing', () => {
       connectionType: 'client',
       transportType: 'websocket'
     })).toThrow(/private.*target|endpoint|fingerprint|public key/i);
+  });
+
+  it.each([
+    {...privateTarget, routeLock: {...privateTarget.routeLock, endpoint: 'wss://other.example.test/apiws'}},
+    ({...privateTarget, routeLock: {...privateTarget.routeLock, transport: 'https' as const}} as unknown as typeof privateTarget),
+    {...privateTarget, routeLock: {...privateTarget.routeLock, dcIds: [1, 2, 3, 4] as const}}
+  ])('fails closed for inconsistent private route-lock metadata', (target) => {
+    expect(() => resolveMtprotoRoute({
+      target,
+      dcId: 1,
+      connectionType: 'client',
+      transportType: 'websocket'
+    })).toThrow(/route.?lock|private.*target|endpoint/i);
   });
 
   it('keeps ordinary Telegram routing unchanged', () => {
