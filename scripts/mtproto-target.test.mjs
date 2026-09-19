@@ -14,7 +14,11 @@ import {join, resolve} from 'node:path';
 import {inspect} from 'node:util';
 import {afterAll, describe, expect, it, vi} from 'vitest';
 import * as mtprotoTarget from './mtproto-target.mjs';
-import {auditPrivateArtifact, writePrivateArtifactManifest} from './private-artifact.mjs';
+import {
+  auditPrivateArtifact,
+  verifyPrivateArtifactCsp,
+  writePrivateArtifactManifest
+} from './private-artifact.mjs';
 import {createPrivateWorkerBlobURL} from '../src/helpers/createPrivateWorkerBlobURL';
 const {assertRunnableMtprotoTarget, resolveMtprotoTarget} = mtprotoTarget;
 
@@ -319,6 +323,7 @@ describe('MTProto build target', () => {
 
   it('emits a self-identifying private Vite artifact with a blob-safe worker and restrictive CSP', async() => {
     const {outputDirectory, result} = buildPrivateTarget();
+    const target = resolveMtprotoTarget(privateEnv());
 
     expect(result.status).toBe(0);
     expect(existsSync(outputDirectory)).toBe(true);
@@ -333,6 +338,7 @@ describe('MTProto build target', () => {
     const index = readFileSync(join(outputDirectory, 'index.html'), 'utf8').replaceAll('&#39;', "'");
     expect(index).toContain('Content-Security-Policy');
     expect(index).toContain("connect-src 'self' wss://private.example.test:2443/apiws");
+    expect(() => verifyPrivateArtifactCsp(outputDirectory, target.endpoint)).not.toThrow();
     const executable = readdirSync(outputDirectory)
     .filter((file) => file.endsWith('.js'))
     .map((file) => readFileSync(join(outputDirectory, file), 'utf8'))

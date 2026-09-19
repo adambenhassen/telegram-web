@@ -1,0 +1,7 @@
+{
+  "MTPROTO_TARGET_MODE": "private",
+  "MTPROTO_PRIVATE_ENDPOINT": "wss://private.example.test:2443/apiws",
+  "MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE": "scripts/fixtures/private-mtproto-public.pem",
+  "publicKeySha256": "663eda958fd84c85e61a55f7afadf6ee265a1910dfe00e4a5e54f078b25cc904",
+  "fingerprint": "289f8aeb5aa17de3"
+}

@@ -1,0 +1,98 @@
+name: Private MTProto Artifact Publication
+
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+  repository-ci:
+    name: Repository CI gate
+    uses: ./.github/workflows/ci.yml
+
+  deployment-stack:
+    name: Deployment stack gate
+    uses: ./.github/workflows/deployment-stack-checks.yml
+
+  private-build:
+    name: Build and publish audited private artifact
+    needs:
+      - repository-ci
+      - deployment-stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PRIVATE_ARTIFACT_COMMIT: ${{ github.sha }}
+
+    steps:
+      - name: Check out the publication commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 1
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 11.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Validate reviewed private-target attestation
+        env:
+          MTPROTO_TARGET_MODE: private
+          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
+        run: node scripts/private-artifact-release.mjs validate-target
+
+      - name: Run private negative-input and route-matrix tests
+        run: >-
+          pnpm exec vitest run
+          scripts/mtproto-target.test.mjs
+          scripts/mtproto-worker-routing.test.mjs
+          src/tests/mtprotoRouting.test.ts
+          src/tests/privateMtprotoEgress.test.ts
+          src/tests/mtprotoWorkerReady.test.ts
+          src/tests/superMessagePort.test.ts
+
+      - name: Build reviewed private artifact
+        env:
+          MTPROTO_TARGET_MODE: private
+          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
+        run: pnpm exec vite build --outDir dist-private
+
+      - name: Audit bundle routes, keys, and digest
+        env:
+          MTPROTO_TARGET_MODE: private
+          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
+        run: pnpm run check-bundle -- dist-private
+
+      - name: Verify CSP, manifest, digest, and source commit
+        id: verify
+        env:
+          MTPROTO_TARGET_MODE: private
+          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
+        run: pnpm run verify-private-artifact -- --dist dist-private --commit "$PRIVATE_ARTIFACT_COMMIT"
+
+      - name: Publish artifact and sidecar as one release unit
+        uses: actions/upload-artifact@v4
+        with:
+          name: private-mtproto-${{ steps.verify.outputs.source_commit }}-${{ steps.verify.outputs.artifact_digest_hex }}
+          path: dist-private
+          if-no-files-found: error
+          retention-days: 30

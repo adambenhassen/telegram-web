@@ -157,6 +157,34 @@ export function privateContentSecurityPolicy(endpoint) {
   ].join('; ') + ';';
 }
 
+export function verifyPrivateArtifactCsp(directory, endpoint) {
+  const indexPath = resolve(directory, 'index.html');
+  if(!existsSync(indexPath)) {
+    invalidArtifact('index document is missing');
+  }
+
+  const expectedPolicy = privateContentSecurityPolicy(endpoint);
+  const html = readFileSync(indexPath, 'utf8')
+  .replaceAll('&#39;', "'")
+  .replaceAll('&quot;', '"')
+  .replaceAll('&amp;', '&');
+  const policies = [...html.matchAll(/<meta\b[^>]*>/gi)]
+  .filter(([tag]) => /http-equiv\s*=\s*(['"])Content-Security-Policy\1/i.test(tag))
+  .map(([tag]) => tag.match(/\bcontent\s*=\s*(['"])(.*?)\1/i)?.[2])
+  .filter((policy) => policy !== undefined);
+  if(!policies.includes(expectedPolicy)) {
+    invalidArtifact('index document CSP does not match the configured endpoint');
+  }
+
+  const connectSources = [...policies.join('\n').matchAll(/connect-src\s+([^;]+)/gi)]
+  .flatMap((match) => match[1].trim().split(/\s+/))
+  .map((source) => source.replace(/^['"]|['"]$/g, ''))
+  .filter((source) => source.startsWith('wss://'));
+  if(connectSources.some((source) => source !== endpoint)) {
+    invalidArtifact('index document CSP contains an unexpected WSS endpoint');
+  }
+}
+
 export function auditPrivateArtifact(directory, target) {
   if(!target || target.mode !== 'private' || typeof target.endpoint !== 'string' ||
     !/^[0-9a-f]{16}$/.test(target.fingerprint)) {

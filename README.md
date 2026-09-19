@@ -44,6 +44,8 @@ The build fails closed when target validation or the production-bundle audit fai
 
 Do not edit the sidecar or swap endpoints and keys in an existing output. Build a new artifact with the desired three variables. Leaving these variables unset keeps the ordinary Telegram build unchanged and does not emit a private manifest.
 
+The `Private MTProto Artifact Publication` workflow runs the ordinary repository and deployment-stack checks first, then publishes the bundle and `mtproto-target.json` together as a GitHub Actions artifact named with the source commit and artifact digest. It uses the reviewed public target in `ci/private-mtproto-target.json`; changing the workflow values, public-key bytes, target, or source commit without updating the attestation fails before upload. After downloading a unit, verify its sidecar digest and bundle audit with `MTPROTO_TARGET_MODE=private pnpm run check-bundle -- <artifact-directory>`; the publication job additionally verifies the attested source commit and target before upload.
+
 ### Running in docker
 
 #### Developing: 

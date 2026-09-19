@@ -10,6 +10,7 @@
     "serve": "pnpm run build && node server.js --dist",
     "build": "pnpm test --run && pnpm run typecheck && pnpm run generate-changelog && vite build && pnpm run check-bundle",
     "check-bundle": "node scripts/check-bundle-mangling.mjs",
+    "verify-private-artifact": "node scripts/private-artifact-release.mjs verify",
     "test": "vitest",
     "test:ephemeral-bot": "node ./src/tests/fixtures/ephemeralBot/bot.mjs",
     "test:lottie": "playwright test e2e/lottie*.spec.ts",
