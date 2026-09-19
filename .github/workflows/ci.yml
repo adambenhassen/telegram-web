@@ -2,6 +2,11 @@ name: Pull Request CI
 
 on:
   workflow_call:
+    inputs:
+      checkout_ref:
+        description: Immutable source commit to check out for a caller.
+        required: false
+        type: string
   pull_request:
     branches:
       - master
@@ -22,6 +27,7 @@ jobs:
       - name: Check out code
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
 
       - name: Set up pnpm

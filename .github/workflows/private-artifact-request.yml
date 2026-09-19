@@ -1,0 +1,36 @@
+name: Private MTProto Artifact Request
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: Reviewed target ref, refs/heads/master or an explicitly reviewed release tag
+        required: true
+        type: string
+
+permissions:
+  actions: write
+
+jobs:
+  request:
+    name: Record data-only publication request
+    runs-on: ubuntu-latest
+    permissions:
+      actions: write
+    steps:
+      - name: Write the target ref request
+        env:
+          PRIVATE_ARTIFACT_TARGET_REF: ${{ inputs.target_ref }}
+        run: >-
+          node --input-type=module -e
+          "import {writeFileSync} from 'node:fs';
+          writeFileSync(process.env.RUNNER_TEMP + '/request.json',
+          JSON.stringify({targetRef: process.env.PRIVATE_ARTIFACT_TARGET_REF}) + '\\n')"
+
+      - name: Upload the data-only request
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-artifact-request
+          path: ${{ runner.temp }}/request.json
+          if-no-files-found: error
+          retention-days: 1

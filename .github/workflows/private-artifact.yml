@@ -4,49 +4,137 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
+  workflow_run:
+    workflows:
+      - Private MTProto Artifact Request
+    types:
+      - completed
+    branches:
+      - master
 
 permissions:
   contents: read
 
 jobs:
+  publication-prepare:
+    name: Validate reviewed publication request
+    if: >-
+      github.event_name == 'push' ||
+      (github.event_name == 'workflow_run' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'master')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: write
+      contents: read
+    outputs:
+      source_ref: ${{ steps.prepare.outputs.source_ref }}
+      source_commit: ${{ steps.prepare.outputs.source_commit }}
+      reviewed_workflow_commit: ${{ steps.prepare.outputs.reviewed_workflow_commit }}
+      target_mode: ${{ steps.prepare.outputs.target_mode }}
+      private_endpoint: ${{ steps.prepare.outputs.private_endpoint }}
+      private_key_file: ${{ steps.prepare.outputs.private_key_file }}
+      snapshot_artifact_name: ${{ steps.prepare.outputs.snapshot_artifact_name }}
+
+    steps:
+      - name: Check out the reviewed workflow commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download the data-only publication request
+        if: github.event_name == 'workflow_run'
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: private-artifact-request
+          path: ${{ runner.temp }}/private-artifact-request
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+
+      - name: Enforce the reviewed allowlist before installation
+        id: prepare
+        env:
+          PRIVATE_ARTIFACT_EVENT: ${{ github.event_name }}
+          PRIVATE_ARTIFACT_HEAD_BRANCH: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_branch || github.ref_name }}
+          PRIVATE_ARTIFACT_CONCLUSION: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.conclusion || 'success' }}
+          PRIVATE_ARTIFACT_WORKFLOW_NAME: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}
+          PRIVATE_ARTIFACT_WORKFLOW_COMMIT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          PRIVATE_ARTIFACT_TARGET_REF: ${{ github.event_name == 'push' && 'refs/heads/master' || '' }}
+        run: >-
+          node scripts/private-artifact-release.mjs prepare
+          --event "$PRIVATE_ARTIFACT_EVENT"
+          --head-branch "$PRIVATE_ARTIFACT_HEAD_BRANCH"
+          --conclusion "$PRIVATE_ARTIFACT_CONCLUSION"
+          --workflow-name "$PRIVATE_ARTIFACT_WORKFLOW_NAME"
+          --request "$RUNNER_TEMP/private-artifact-request/request.json"
+          --target-ref "$PRIVATE_ARTIFACT_TARGET_REF"
+          --workflow-commit "$PRIVATE_ARTIFACT_WORKFLOW_COMMIT"
+          --output "$RUNNER_TEMP/private-target-snapshot"
+
+      - name: Stage immutable target attestation and publisher verifier
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: ${{ steps.prepare.outputs.snapshot_artifact_name }}
+          path: ${{ runner.temp }}/private-target-snapshot
+          if-no-files-found: error
+          retention-days: 1
+
   repository-ci:
     name: Repository CI gate
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/')
+    needs: publication-prepare
+    if: needs.publication-prepare.result == 'success'
     uses: ./.github/workflows/ci.yml
+    with:
+      checkout_ref: ${{ needs.publication-prepare.outputs.source_commit }}
 
   deployment-stack:
     name: Deployment stack gate
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/')
+    needs: publication-prepare
+    if: needs.publication-prepare.result == 'success'
     uses: ./.github/workflows/deployment-stack-checks.yml
+    with:
+      checkout_ref: ${{ needs.publication-prepare.outputs.source_commit }}
 
   private-build:
     name: Build and stage audited private artifact
-    if: github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/')
     needs:
+      - publication-prepare
       - repository-ci
       - deployment-stack
+    if: >-
+      needs.publication-prepare.result == 'success' &&
+      needs.repository-ci.result == 'success' &&
+      needs.deployment-stack.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     permissions:
       contents: read
     outputs:
-      source_commit: ${{ steps.verify.outputs.source_commit }}
       artifact_digest_hex: ${{ steps.verify.outputs.artifact_digest_hex }}
     env:
-      PRIVATE_ARTIFACT_COMMIT: ${{ github.sha }}
-      PRIVATE_ARTIFACT_REF: ${{ github.ref }}
+      MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
+      MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
+      MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
 
     steps:
-      - name: Check out the publication commit
+      - name: Check out the allowlisted target commit
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.sha }}
-          fetch-depth: 0
+          ref: ${{ needs.publication-prepare.outputs.source_commit }}
+          fetch-depth: 1
           persist-credentials: false
 
-      - name: Verify reviewed publication ref
-        run: node scripts/private-artifact-release.mjs validate-ref
+      - name: Download the immutable target snapshot
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.publication-prepare.outputs.snapshot_artifact_name }}
+          path: ${{ runner.temp }}/private-target-snapshot
+
+      - name: Validate the immutable target before installation
+        run: node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
@@ -62,12 +150,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Validate reviewed private-target attestation
-        env:
-          MTPROTO_TARGET_MODE: private
-          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
-          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
-        run: node scripts/private-artifact-release.mjs validate-target
+      - name: Revalidate the immutable target after installation
+        run: node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Run private negative-input and route-matrix tests
         run: >-
@@ -80,39 +164,34 @@ jobs:
           src/tests/superMessagePort.test.ts
 
       - name: Build reviewed private artifact
-        env:
-          MTPROTO_TARGET_MODE: private
-          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
-          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
         run: pnpm exec vite build --outDir dist-private
 
       - name: Audit bundle routes, keys, and digest
-        env:
-          MTPROTO_TARGET_MODE: private
-          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
-          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
         run: pnpm run check-bundle -- dist-private
 
       - name: Verify CSP, manifest, digest, and source commit
         id: verify
-        env:
-          MTPROTO_TARGET_MODE: private
-          MTPROTO_PRIVATE_ENDPOINT: wss://private.example.test:2443/apiws
-          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: scripts/fixtures/private-mtproto-public.pem
-        run: pnpm run verify-private-artifact -- --dist dist-private --commit "$PRIVATE_ARTIFACT_COMMIT"
+        run: >-
+          pnpm run verify-private-artifact --
+          --dist dist-private
+          --snapshot "$RUNNER_TEMP/private-target-snapshot"
+          --ref "${{ needs.publication-prepare.outputs.source_ref }}"
+          --commit "${{ needs.publication-prepare.outputs.source_commit }}"
 
       - name: Stage audited artifact for the isolated publisher
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-mtproto-staged-${{ steps.verify.outputs.source_commit }}-${{ steps.verify.outputs.artifact_digest_hex }}
+          name: private-mtproto-staged-${{ needs.publication-prepare.outputs.source_commit }}-${{ steps.verify.outputs.artifact_digest_hex }}
           path: dist-private
           if-no-files-found: error
           retention-days: 1
 
   private-publish:
     name: Publish audited private artifact
-    if: needs.private-build.result == 'success' && (github.ref == 'refs/heads/master' || startsWith(github.ref, 'refs/tags/release/'))
-    needs: private-build
+    needs:
+      - publication-prepare
+      - private-build
+    if: needs.publication-prepare.result == 'success' && needs.private-build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write
@@ -121,13 +200,28 @@ jobs:
       - name: Download the verified artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
-          name: private-mtproto-staged-${{ needs.private-build.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
+          name: private-mtproto-staged-${{ needs.publication-prepare.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
           path: dist-private
+
+      - name: Download the immutable target snapshot
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: ${{ needs.publication-prepare.outputs.snapshot_artifact_name }}
+          path: ${{ runner.temp }}/private-target-snapshot
+
+      - name: Reverify the downloaded unit in the isolated publisher
+        run: >-
+          node "$RUNNER_TEMP/private-target-snapshot/publisher-verify.mjs"
+          --dist dist-private
+          --snapshot "$RUNNER_TEMP/private-target-snapshot"
+          --ref "${{ needs.publication-prepare.outputs.source_ref }}"
+          --commit "${{ needs.publication-prepare.outputs.source_commit }}"
+          --digest "${{ needs.private-build.outputs.artifact_digest_hex }}"
 
       - name: Publish artifact and sidecar as one release unit
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: private-mtproto-${{ needs.private-build.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
+          name: private-mtproto-${{ needs.publication-prepare.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
           path: dist-private
           if-no-files-found: error
           retention-days: 30

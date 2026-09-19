@@ -11,9 +11,13 @@ import {afterAll, describe, expect, it} from 'vitest';
 import {
   assertPublicationRef,
   assertReviewedEnvironment,
+  assertTrustedWorkflowRun,
+  loadPublicationRequest,
   loadReviewedPrivateTarget,
+  snapshotReviewedPrivateTarget,
   verifyPrivateArtifactRelease
 } from './private-artifact-release.mjs';
+import {verifyPublishedArtifact} from './private-artifact-publish-verify.mjs';
 import {
   privateContentSecurityPolicy,
   verifyPrivateArtifactCsp,
@@ -86,6 +90,46 @@ describe('private artifact publication attestation', () => {
     expect(() => assertPublicationRef('refs/heads/unreviewed', commit, [])).toThrow(/master.*reviewed release ref/i);
   });
 
+  it('rejects a request from a tampered workflow definition before target resolution', () => {
+    expect(() => assertTrustedWorkflowRun({
+      eventName: 'workflow_run',
+      workflowName: 'Private MTProto Artifact Request',
+      headBranch: 'feature/unreviewed',
+      conclusion: 'success'
+    })).toThrow(/master branch/i);
+    expect(() => assertTrustedWorkflowRun({
+      eventName: 'workflow_run',
+      workflowName: 'Untrusted Request',
+      headBranch: 'master',
+      conclusion: 'success'
+    })).toThrow(/not trusted/i);
+
+    const publisherWorkflow = readFileSync(
+      join(repositoryRoot, '.github/workflows/private-artifact.yml'),
+      'utf8'
+    );
+    const requestWorkflow = readFileSync(
+      join(repositoryRoot, '.github/workflows/private-artifact-request.yml'),
+      'utf8'
+    );
+    expect(publisherWorkflow).toContain('workflow_run:');
+    expect(publisherWorkflow).not.toContain('workflow_dispatch:');
+    expect(publisherWorkflow).toContain('github.event.workflow_run.head_branch');
+    expect(requestWorkflow).toContain('workflow_dispatch:');
+    expect(requestWorkflow).toContain('target_ref:');
+    expect(requestWorkflow).not.toContain('pnpm install');
+  });
+
+  it('accepts only an exact data-only publication request', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-request-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    writeFileSync(requestPath, JSON.stringify({targetRef: 'refs/heads/master'}));
+    expect(loadPublicationRequest(requestPath)).toEqual({targetRef: 'refs/heads/master'});
+    writeFileSync(requestPath, JSON.stringify({targetRef: 'refs/heads/master', workflow: 'tampered'}));
+    expect(() => loadPublicationRequest(requestPath)).toThrow(/fields/i);
+  });
+
   it('rejects an unreviewed ref before it can verify or publish an artifact', () => {
     const directory = temporaryArtifact();
     const commit = currentCommit();
@@ -138,6 +182,79 @@ describe('private artifact publication attestation', () => {
       environment: publicationEnvironment(commit)
     }))
     .toThrow(/source commit/i);
+  });
+  it('uses the immutable target snapshot and explicit publication inputs', () => {
+    const directory = temporaryArtifact();
+    const commit = currentCommit();
+    const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-snapshot-'));
+    temporaryDirectories.push(snapshotDirectory);
+    const snapshot = snapshotReviewedPrivateTarget({
+      rootDirectory: repositoryRoot,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      reviewedWorkflowCommit: commit,
+      outputDirectory: snapshotDirectory
+    });
+
+    const result = verifyPrivateArtifactRelease({
+      directory,
+      expectedCommit: commit,
+      publicationRef: 'refs/heads/master',
+      targetRootDirectory: snapshotDirectory,
+      reviewedReleaseRefs: snapshot.reviewedReleaseRefs,
+      environment: {
+        ...environment,
+        MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: snapshot.keyPath,
+        PRIVATE_ARTIFACT_REF: 'refs/heads/unreviewed',
+        PRIVATE_ARTIFACT_COMMIT: '0'.repeat(40)
+      }
+    });
+    expect(result.commit).toBe(commit);
+
+    writeFileSync(snapshot.keyPath, 'tampered snapshot key');
+    expect(() => verifyPrivateArtifactRelease({
+      directory,
+      expectedCommit: commit,
+      publicationRef: 'refs/heads/master',
+      targetRootDirectory: snapshotDirectory,
+      reviewedReleaseRefs: snapshot.reviewedReleaseRefs,
+      environment: {
+        ...environment,
+        MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: snapshot.keyPath
+      }
+    })).toThrow(/public-key file digest/i);
+  });
+
+  it('reverifies a downloaded artifact against the immutable snapshot', () => {
+    const directory = temporaryArtifact();
+    const commit = currentCommit();
+    const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-publisher-'));
+    temporaryDirectories.push(snapshotDirectory);
+    snapshotReviewedPrivateTarget({
+      rootDirectory: repositoryRoot,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      reviewedWorkflowCommit: commit,
+      outputDirectory: snapshotDirectory
+    });
+    const manifest = JSON.parse(readFileSync(join(directory, 'mtproto-target.json'), 'utf8'));
+
+    expect(verifyPublishedArtifact({
+      directory,
+      snapshotDirectory,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
+    }).sourceCommit).toBe(commit);
+
+    writeFileSync(join(directory, 'client.js'), readFileSync(join(directory, 'client.js'), 'utf8') + '\n// mutated');
+    expect(() => verifyPublishedArtifact({
+      directory,
+      snapshotDirectory,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
+    })).toThrow(/digest/i);
   });
 });
 
