@@ -182,13 +182,30 @@ describe('private artifact publication attestation', () => {
 
   it.each([
     ['an HTML comment', '<head><!-- CSP_MARKER --></head><body></body>'],
-    ['the document body', '<head></head><body>CSP_MARKER</body>']
+    ['the document body', '<head></head><body>CSP_MARKER</body>'],
+    ['a fake head after the body', '<!doctype html><html><body><head>CSP_MARKER</head></body></html>']
   ])('rejects a CSP marker in %s instead of a real head meta element', (_name, document) => {
     const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-'));
     temporaryDirectories.push(directory);
     const endpoint = 'wss://private.example.test:2443/apiws';
     const marker = `<meta http-equiv="Content-Security-Policy" content="${privateContentSecurityPolicy(endpoint)}">`;
     writeFileSync(join(directory, 'index.html'), document.replace('CSP_MARKER', marker));
+
+    expect(() => verifyPrivateArtifactCsp(directory, endpoint))
+    .toThrow(/CSP does not match/i);
+  });
+
+  it('uses the first duplicate CSP attribute, matching browser parsing', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-csp-duplicate-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://private.example.test:2443/apiws';
+    const otherPolicy = privateContentSecurityPolicy('wss://other.example.test:2443/apiws');
+    const expectedPolicy = privateContentSecurityPolicy(endpoint);
+    writeFileSync(join(directory, 'index.html'), [
+      '<!doctype html><html><head>',
+      `<meta http-equiv="Content-Security-Policy" content="${otherPolicy}" content="${expectedPolicy}">`,
+      '</head><body></body></html>'
+    ].join(''));
 
     expect(() => verifyPrivateArtifactCsp(directory, endpoint))
     .toThrow(/CSP does not match/i);

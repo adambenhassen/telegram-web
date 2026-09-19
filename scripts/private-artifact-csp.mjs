@@ -55,7 +55,9 @@ function parseAttributes(tag, start) {
       value = tag.slice(valueStart, index);
       if(quote && tag[index] === quote) index++;
     }
-    attributes.set(name, decodeHtmlEntities(value));
+    if(!attributes.has(name)) {
+      attributes.set(name, decodeHtmlEntities(value));
+    }
   }
   return attributes;
 }
@@ -89,7 +91,7 @@ export function readHeadContentSecurityPolicies(document) {
   if(typeof document !== 'string') return [];
 
   const policies = [];
-  let inHead = false;
+  let headState = 'before';
   let index = 0;
   while(index < document.length) {
     if(document.startsWith('<!--', index)) {
@@ -110,20 +112,28 @@ export function readHeadContentSecurityPolicies(document) {
     }
 
     if(tag.closing) {
-      if(tag.name === 'head') break;
+      if(tag.name === 'head' && headState === 'in') headState = 'after';
       index = end + 1;
       continue;
     }
     if(tag.name === 'head') {
-      inHead = true;
+      if(headState === 'before') headState = 'in';
       index = end + 1;
       continue;
+    }
+    if(tag.name === 'body') {
+      headState = 'after';
+      index = end + 1;
+      continue;
+    }
+    if(headState === 'before' && tag.name !== 'html') {
+      headState = 'after';
     }
     if(tag.name === 'script' || tag.name === 'style') {
       index = skipRawElement(document, end + 1, tag.name);
       continue;
     }
-    if(inHead && tag.name === 'meta') {
+    if(headState === 'in' && tag.name === 'meta') {
       const httpEquiv = tag.attributes.get('http-equiv')?.trim().toLowerCase();
       const content = tag.attributes.get('content');
       if(httpEquiv === 'content-security-policy' && content !== undefined) {
