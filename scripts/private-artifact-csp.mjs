@@ -1,3 +1,14 @@
+const HTML_WHITESPACE_PATTERN = '[\\t\\n\\f\\r ]';
+const HTML_WHITESPACE = new RegExp(HTML_WHITESPACE_PATTERN);
+const HTML_TAG_START = new RegExp(
+  `^<${HTML_WHITESPACE_PATTERN}*(\\/?)${HTML_WHITESPACE_PATTERN}*([A-Za-z][A-Za-z0-9:-]*)`
+);
+const HTML_SELF_CLOSING_TAG = new RegExp(`/${HTML_WHITESPACE_PATTERN}*>$`);
+
+function isHtmlWhitespace(character) {
+  return HTML_WHITESPACE.test(character || '');
+}
+
 function tagEnd(document, start) {
   let quote = '';
   for(let index = start + 1; index < document.length; index++) {
@@ -19,7 +30,7 @@ function skipComment(document, start) {
 }
 
 function skipRawElement(document, start, name) {
-  const closingTag = new RegExp(`</${name}\\s*>`, 'ig');
+  const closingTag = new RegExp(`</${name}${HTML_WHITESPACE_PATTERN}*>`, 'ig');
   closingTag.lastIndex = start;
   const match = closingTag.exec(document);
   return match ? match.index + match[0].length : document.length;
@@ -83,28 +94,29 @@ function parseAttributes(tag, start) {
   const attributes = new Map();
   let index = start;
   while(index < tag.length) {
-    while(/[\s/>]/.test(tag[index] || '')) index++;
+    while(isHtmlWhitespace(tag[index]) || tag[index] === '/' || tag[index] === '>') index++;
     if(index >= tag.length || tag[index] === '>') break;
 
     const nameStart = index;
-    while(index < tag.length && !/[\s=/>]/.test(tag[index])) index++;
+    while(index < tag.length && !isHtmlWhitespace(tag[index]) &&
+      tag[index] !== '=' && tag[index] !== '/' && tag[index] !== '>') index++;
     if(index === nameStart) {
       index++;
       continue;
     }
     const name = tag.slice(nameStart, index).toLowerCase();
-    while(/\s/.test(tag[index] || '')) index++;
+    while(isHtmlWhitespace(tag[index])) index++;
 
     let value = '';
     if(tag[index] === '=') {
       index++;
-      while(/\s/.test(tag[index] || '')) index++;
+      while(isHtmlWhitespace(tag[index])) index++;
       const quote = tag[index] === '"' || tag[index] === "'" ? tag[index++] : '';
       const valueStart = index;
       if(quote) {
         while(index < tag.length && tag[index] !== quote) index++;
       } else {
-        while(index < tag.length && !/[\s>]/.test(tag[index])) index++;
+        while(index < tag.length && !isHtmlWhitespace(tag[index]) && tag[index] !== '>') index++;
       }
       value = tag.slice(valueStart, index);
       if(quote && tag[index] === quote) index++;
@@ -117,12 +129,12 @@ function parseAttributes(tag, start) {
 }
 
 function parseTag(tag) {
-  const match = /^<\s*(\/?)\s*([A-Za-z][A-Za-z0-9:-]*)/.exec(tag);
+  const match = HTML_TAG_START.exec(tag);
   if(!match) return null;
   return {
     closing: Boolean(match[1]),
     name: match[2].toLowerCase(),
-    selfClosing: !match[1] && /\/\s*>$/.test(tag),
+    selfClosing: !match[1] && HTML_SELF_CLOSING_TAG.test(tag),
     attributes: match[1] ? new Map() : parseAttributes(tag, match[0].length)
   };
 }
@@ -154,7 +166,7 @@ export function readHeadContentSecurityPolicies(document) {
       continue;
     }
     if(document[index] !== '<') {
-      if(headState !== 'after' && !/[\t\n\f\r ]/.test(document[index])) headState = 'after';
+      if(headState !== 'after' && !isHtmlWhitespace(document[index])) headState = 'after';
       index++;
       continue;
     }
