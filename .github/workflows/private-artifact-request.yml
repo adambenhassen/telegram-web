@@ -1,0 +1,34 @@
+name: Private MTProto Artifact Request
+
+# repository_dispatch evaluates this workflow from the repository's default
+# branch, so an unreviewed target ref cannot replace the request definition.
+on:
+  repository_dispatch:
+    types:
+      - private-artifact-request
+
+permissions: {}
+
+jobs:
+  request:
+    name: Record data-only publication request
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: Write the target ref request
+        env:
+          PRIVATE_ARTIFACT_TARGET_REF: ${{ github.event.client_payload.target_ref }}
+        run: >-
+          node --input-type=module -e
+          "import {writeFileSync} from 'node:fs';
+          writeFileSync(process.env.RUNNER_TEMP + '/request.json',
+          JSON.stringify({targetRef: process.env.PRIVATE_ARTIFACT_TARGET_REF}) + '\\n')"
+
+      - name: Upload the data-only request
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: private-artifact-request
+          path: ${{ runner.temp }}/request.json
+          if-no-files-found: error
+          retention-days: 1

@@ -1,6 +1,12 @@
 name: Deployment Stack Checks
 
 on:
+  workflow_call:
+    inputs:
+      checkout_ref:
+        description: Immutable source commit to check out for a caller.
+        required: false
+        type: string
   pull_request:
     branches:
       - master
@@ -19,7 +25,10 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
 
       - name: Build deployment image
         run: docker build --pull --file deploy/telegram-web/Dockerfile --tag telegram-web:ci .
@@ -84,7 +93,10 @@ jobs:
 
     steps:
       - name: Check out code
-        uses: actions/checkout@v4
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
+          persist-credentials: false
 
       - name: Validate Compose project isolation and startup
         shell: bash
