@@ -184,6 +184,8 @@ describe('private artifact publication attestation', () => {
     ['an HTML comment', '<head><!-- CSP_MARKER --></head><body></body>'],
     ['the document body', '<head></head><body>CSP_MARKER</body>'],
     ['a fake head after the body', '<!doctype html><html><body><head>CSP_MARKER</head></body></html>'],
+    ['non-whitespace text before the head', '<!doctype html><html>text<head>CSP_MARKER</head><body></body></html>'],
+    ['non-whitespace text in the head', '<!doctype html><html><head>textCSP_MARKER</head><body></body></html>'],
     ['a title raw-text element', '<!doctype html><html><head><title>CSP_MARKER</title></head><body></body></html>'],
     ['a textarea raw-text element', '<!doctype html><html><head><textarea>CSP_MARKER</textarea></head><body></body></html>'],
     ['a template element', '<!doctype html><html><head><template>CSP_MARKER</template></head><body></body></html>'],
@@ -237,6 +239,8 @@ describe('private artifact publication attestation', () => {
   it.each([
     ['an HTML comment', '<!doctype html><html><head><!-- CSP_MARKER --></head><body></body></html>'],
     ['the document body', '<!doctype html><html><head></head><body>CSP_MARKER</body></html>'],
+    ['non-whitespace text before the head', '<!doctype html><html>text<head>CSP_MARKER</head><body></body></html>'],
+    ['non-whitespace text in the head', '<!doctype html><html><head>textCSP_MARKER</head><body></body></html>'],
     ['a title raw-text element', '<!doctype html><html><head><title>CSP_MARKER</title></head><body></body></html>'],
     ['a textarea raw-text element', '<!doctype html><html><head><textarea>CSP_MARKER</textarea></head><body></body></html>'],
     ['a template element', '<!doctype html><html><head><template>CSP_MARKER</template></head><body></body></html>'],
