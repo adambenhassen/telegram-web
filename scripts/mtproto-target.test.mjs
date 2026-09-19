@@ -292,6 +292,29 @@ describe('MTProto build target', () => {
     expect(mtprotoTarget.verifyPrivateArtifactManifest(outputDirectory)).toEqual(manifest);
   }, 60_000);
 
+  it('fails private bundle auditing when the sidecar is missing', () => {
+    const outputDirectory = temporaryDirectory();
+    writeFileSync(join(outputDirectory, 'client.js'), 'const client = 1;\n');
+    writeFileSync(join(outputDirectory, 'client.js.map'), JSON.stringify({
+      version: 3,
+      names: [],
+      sources: [],
+      mappings: ''
+    }));
+
+    const audit = spawnSync(process.execPath, [
+      resolve('scripts/check-bundle-mangling.mjs'),
+      outputDirectory
+    ], {
+      cwd: process.cwd(),
+      encoding: 'utf8',
+      env: {...process.env, MTPROTO_TARGET_MODE: 'private'}
+    });
+
+    expect(audit.status).not.toBe(0);
+    expect(`${audit.stdout}${audit.stderr}`).toMatch(/private artifact manifest is missing/i);
+  }, 60_000);
+
   it('fails private artifact verification after a completed artifact is changed', () => {
     const {outputDirectory, result} = buildPrivateTarget();
     expect(result.status).toBe(0);

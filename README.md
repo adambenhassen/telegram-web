@@ -40,7 +40,7 @@ MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE=/path/to/public-key.pem \
 pnpm exec vite build --outDir dist-private
 ```
 
-The build fails closed when target validation or the production-bundle audit fails. The audit rejects Telegram MTProto hostnames and IPs, HTTP MTProto transports, Telegram or test RSA keys, and additional WSS targets. A successful private artifact contains a restrictive CSP and the `mtproto-target.json` sidecar with only `mode`, normalized `endpoint`, RSA `fingerprint`, `sourceCommit`, and the completed artifact `artifactDigest`. The digest excludes the sidecar itself. Verify an existing output with `pnpm run check-bundle -- dist-private`.
+The build fails closed when target validation or the production-bundle audit fails. The audit rejects Telegram MTProto hostnames and IPs, HTTP MTProto transports, Telegram or test RSA keys, and additional WSS targets. A successful private artifact contains a restrictive CSP and the `mtproto-target.json` sidecar with only `mode`, normalized `endpoint`, RSA `fingerprint`, `sourceCommit`, and the completed artifact `artifactDigest`. The digest excludes the sidecar itself. Verify an existing output with `MTPROTO_TARGET_MODE=private pnpm run check-bundle -- dist-private`; private mode fails if the sidecar is missing.
 
 Do not edit the sidecar or swap endpoints and keys in an existing output. Build a new artifact with the desired three variables. Leaving these variables unset keeps the ordinary Telegram build unchanged and does not emit a private manifest.
 
