@@ -29,6 +29,7 @@ jobs:
       actions: write
       contents: read
     outputs:
+      publish_private_artifact: ${{ steps.prepare.outputs.publish_private_artifact }}
       source_ref: ${{ steps.prepare.outputs.source_ref }}
       source_commit: ${{ steps.prepare.outputs.source_commit }}
       reviewed_workflow_commit: ${{ steps.prepare.outputs.reviewed_workflow_commit }}
@@ -63,6 +64,7 @@ jobs:
           PRIVATE_ARTIFACT_WORKFLOW_NAME: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.name || '' }}
           PRIVATE_ARTIFACT_WORKFLOW_COMMIT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           PRIVATE_ARTIFACT_TARGET_REF: ${{ github.event_name == 'push' && 'refs/heads/master' || '' }}
+          PRIVATE_ARTIFACT_PREVIOUS_COMMIT: ${{ github.event_name == 'push' && github.event.before || '' }}
         run: >-
           node scripts/private-artifact-release.mjs prepare
           --event "$PRIVATE_ARTIFACT_EVENT"
@@ -72,9 +74,11 @@ jobs:
           --request "$RUNNER_TEMP/private-artifact-request/request.json"
           --target-ref "$PRIVATE_ARTIFACT_TARGET_REF"
           --workflow-commit "$PRIVATE_ARTIFACT_WORKFLOW_COMMIT"
+          --previous-commit "$PRIVATE_ARTIFACT_PREVIOUS_COMMIT"
           --output "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Stage immutable target attestation and publisher verifier
+        if: steps.prepare.outputs.publish_private_artifact == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: ${{ steps.prepare.outputs.snapshot_artifact_name }}
@@ -85,7 +89,9 @@ jobs:
   repository-ci:
     name: Repository CI gate
     needs: publication-prepare
-    if: needs.publication-prepare.result == 'success'
+    if: >-
+      needs.publication-prepare.result == 'success' &&
+      needs.publication-prepare.outputs.publish_private_artifact == 'true'
     uses: ./.github/workflows/ci.yml
     with:
       checkout_ref: ${{ needs.publication-prepare.outputs.source_commit }}
@@ -93,7 +99,9 @@ jobs:
   deployment-stack:
     name: Deployment stack gate
     needs: publication-prepare
-    if: needs.publication-prepare.result == 'success'
+    if: >-
+      needs.publication-prepare.result == 'success' &&
+      needs.publication-prepare.outputs.publish_private_artifact == 'true'
     uses: ./.github/workflows/deployment-stack-checks.yml
     with:
       checkout_ref: ${{ needs.publication-prepare.outputs.source_commit }}
@@ -106,6 +114,7 @@ jobs:
       - deployment-stack
     if: >-
       needs.publication-prepare.result == 'success' &&
+      needs.publication-prepare.outputs.publish_private_artifact == 'true' &&
       needs.repository-ci.result == 'success' &&
       needs.deployment-stack.result == 'success'
     runs-on: ubuntu-latest
@@ -207,7 +216,10 @@ jobs:
     needs:
       - publication-prepare
       - private-build
-    if: needs.publication-prepare.result == 'success' && needs.private-build.result == 'success'
+    if: >-
+      needs.publication-prepare.result == 'success' &&
+      needs.publication-prepare.outputs.publish_private_artifact == 'true' &&
+      needs.private-build.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: write

@@ -1,5 +1,6 @@
 import {execFileSync} from 'node:child_process';
 import {
+  existsSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -9,6 +10,7 @@ import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {afterAll, describe, expect, it} from 'vitest';
 import {
+  REVIEWED_PRIVATE_TARGET,
   REQUEST_WORKFLOW_NAME,
   assertPublicationRef,
   assertReviewedEnvironment,
@@ -104,6 +106,12 @@ describe('private artifact publication attestation', () => {
       headBranch: 'master',
       conclusion: 'success'
     })).toThrow(/not trusted/i);
+    expect(() => assertTrustedWorkflowRun({
+      eventName: 'workflow_run',
+      workflowName: '',
+      headBranch: 'master',
+      conclusion: 'success'
+    })).toThrow(/not trusted/i);
 
     const publisherWorkflow = readFileSync(
       join(repositoryRoot, '.github/workflows/private-artifact.yml'),
@@ -133,6 +141,78 @@ describe('private artifact publication attestation', () => {
     expect(loadPublicationRequest(requestPath)).toEqual({targetRef: 'refs/heads/master'});
     writeFileSync(requestPath, JSON.stringify({targetRef: 'refs/heads/master', workflow: 'tampered'}));
     expect(() => loadPublicationRequest(requestPath)).toThrow(/fields/i);
+  });
+
+  it('skips publication on a master push when the reviewed target is unchanged', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-push-'));
+    temporaryDirectories.push(directory);
+    const outputDirectory = join(directory, 'snapshot');
+    const outputPath = join(directory, 'github-output');
+    const commit = currentCommit();
+
+    execFileSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'prepare',
+      '--event', 'push',
+      '--head-branch', 'master',
+      '--conclusion', 'success',
+      '--workflow-name', '',
+      '--request', join(directory, 'request.json'),
+      '--target-ref', 'refs/heads/master',
+      '--workflow-commit', commit,
+      '--previous-commit', commit,
+      '--output', outputDirectory
+    ], {
+      cwd: repositoryRoot,
+      env: {...process.env, GITHUB_OUTPUT: outputPath},
+      encoding: 'utf8'
+    });
+
+    expect(readFileSync(outputPath, 'utf8')).toContain('publish_private_artifact=false');
+    expect(existsSync(join(outputDirectory, 'snapshot.json'))).toBe(false);
+    const publisherWorkflow = readFileSync(join(repositoryRoot, '.github/workflows/private-artifact.yml'), 'utf8');
+    expect(publisherWorkflow).toContain("needs.publication-prepare.outputs.publish_private_artifact == 'true'");
+    expect(publisherWorkflow).toContain("steps.prepare.outputs.publish_private_artifact == 'true'");
+  });
+
+  it('prepares publication when a master push changes the reviewed target', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-artifact-push-target-change-'));
+    temporaryDirectories.push(directory);
+    const outputDirectory = join(directory, 'snapshot');
+    const outputPath = join(directory, 'github-output');
+    const commit = currentCommit();
+    const targetChangeCommit = execFileSync('git', ['log', '-1', '--format=%H', '--', REVIEWED_PRIVATE_TARGET], {
+      cwd: repositoryRoot,
+      encoding: 'utf8'
+    }).trim();
+    const previousCommit = execFileSync('git', ['rev-parse', `${targetChangeCommit}^`], {
+      cwd: repositoryRoot,
+      encoding: 'utf8'
+    }).trim();
+
+    execFileSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'prepare',
+      '--event', 'push',
+      '--head-branch', 'master',
+      '--conclusion', 'success',
+      '--workflow-name', '',
+      '--request', join(directory, 'request.json'),
+      '--target-ref', 'refs/heads/master',
+      '--workflow-commit', commit,
+      '--previous-commit', previousCommit,
+      '--output', outputDirectory
+    ], {
+      cwd: repositoryRoot,
+      env: {...process.env, GITHUB_OUTPUT: outputPath},
+      encoding: 'utf8'
+    });
+
+    expect(readFileSync(outputPath, 'utf8')).toContain('publish_private_artifact=true');
+    expect(JSON.parse(readFileSync(join(outputDirectory, 'snapshot.json'), 'utf8'))).toMatchObject({
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit
+    });
   });
 
   it('loads a data-only request when workflow_run passes an empty target ref', () => {
