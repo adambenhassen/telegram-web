@@ -29,10 +29,11 @@ import {
 
 const temporaryDirectories = [];
 const repositoryRoot = resolve('.');
+const {reviewed: reviewedTarget} = loadReviewedPrivateTarget();
 const environment = {
-  MTPROTO_TARGET_MODE: 'private',
-  MTPROTO_PRIVATE_ENDPOINT: 'wss://private.example.test:2443/apiws',
-  MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: 'scripts/fixtures/private-mtproto-public.pem'
+  MTPROTO_TARGET_MODE: reviewedTarget.MTPROTO_TARGET_MODE,
+  MTPROTO_PRIVATE_ENDPOINT: reviewedTarget.MTPROTO_PRIVATE_ENDPOINT,
+  MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: reviewedTarget.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE
 };
 
 afterAll(() => {
@@ -74,11 +75,7 @@ describe('private artifact publication attestation', () => {
   });
 
   it('rejects an endpoint override before artifact verification', () => {
-    expect(() => assertReviewedEnvironment({
-      MTPROTO_TARGET_MODE: 'private',
-      MTPROTO_PRIVATE_ENDPOINT: 'wss://private.example.test:2443/apiws',
-      MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: 'scripts/fixtures/private-mtproto-public.pem'
-    }, {
+    expect(() => assertReviewedEnvironment(reviewedTarget, {
       ...environment,
       MTPROTO_PRIVATE_ENDPOINT: 'wss://other.example.test:2443/apiws'
     })).toThrow(/endpoint.*reviewed target/i);
