@@ -1,6 +1,9 @@
 name: Private MTProto Artifact Publication
 
 on:
+  pull_request:
+    branches:
+      - master
   push:
     branches:
       - master
@@ -16,6 +19,109 @@ permissions:
   contents: read
 
 jobs:
+  private-pull-request:
+    name: Validate private artifact on pull request
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+
+    steps:
+      - name: Check out pull request head
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
+        with:
+          version: 11.16.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Read and validate the reviewed target
+        id: target
+        run: |
+          node --input-type=module <<'NODE'
+          import {appendFileSync} from 'node:fs';
+          import {loadReviewedPrivateTarget} from './scripts/private-artifact-release.mjs';
+
+          const {reviewed} = loadReviewedPrivateTarget();
+          const values = {
+            mode: reviewed.MTPROTO_TARGET_MODE,
+            endpoint: reviewed.MTPROTO_PRIVATE_ENDPOINT,
+            key_file: reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE
+          };
+
+          if(Object.values(values).some((value) => typeof value !== 'string' || !value || /[\r\n]/.test(value))) {
+            throw new Error('[MT] reviewed target values are invalid');
+          }
+
+          for(const [name, value] of Object.entries(values)) {
+            appendFileSync(process.env.GITHUB_OUTPUT, `${name}=${value}\n`);
+          }
+          NODE
+
+      - name: Validate the reviewed target in private mode
+        env:
+          MTPROTO_TARGET_MODE: ${{ steps.target.outputs.mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ steps.target.outputs.endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ steps.target.outputs.key_file }}
+        run: node scripts/private-artifact-release.mjs validate-target
+
+      - name: Run private negative-input, route, and attestation tests
+        run: >-
+          pnpm exec vitest run
+          scripts/mtproto-target.test.mjs
+          scripts/mtproto-worker-routing.test.mjs
+          scripts/private-artifact-release.test.mjs
+          src/tests/mtprotoRouting.test.ts
+          src/tests/privateMtprotoEgress.test.ts
+          src/tests/mtprotoWorkerReady.test.ts
+          src/tests/superMessagePort.test.ts
+
+      - name: Build the reviewed private artifact
+        env:
+          MTPROTO_TARGET_MODE: ${{ steps.target.outputs.mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ steps.target.outputs.endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ steps.target.outputs.key_file }}
+        run: pnpm exec vite build --outDir dist-private
+
+      - name: Audit private bundle routes, keys, and digest
+        env:
+          MTPROTO_TARGET_MODE: ${{ steps.target.outputs.mode }}
+          MTPROTO_PRIVATE_ENDPOINT: ${{ steps.target.outputs.endpoint }}
+          MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ steps.target.outputs.key_file }}
+        run: pnpm run check-bundle -- dist-private
+
+      - name: Verify private manifest, CSP, digest, and PR head
+        run: |
+          node --input-type=module <<'NODE'
+          import {execFileSync} from 'node:child_process';
+          import {loadReviewedPrivateTarget} from './scripts/private-artifact-release.mjs';
+          import {verifyPrivateArtifactCsp, verifyPrivateArtifactManifest} from './scripts/private-artifact.mjs';
+
+          const {target} = loadReviewedPrivateTarget();
+          const manifest = verifyPrivateArtifactManifest('dist-private', target);
+          verifyPrivateArtifactCsp('dist-private', target.endpoint);
+          const head = execFileSync('git', ['rev-parse', 'HEAD'], {encoding: 'utf8'}).trim();
+          if(manifest.sourceCommit !== head) {
+            throw new Error('[MT] private artifact manifest source commit does not match PR head');
+          }
+          console.log(`[private-artifact] sourceCommit=${head}`);
+          console.log(`[private-artifact] artifactDigest=${manifest.artifactDigest}`);
+          console.log(`[private-artifact] keyFingerprint=${target.fingerprint}`);
+          NODE
+
   publication-prepare:
     name: Validate reviewed publication request
     if: >-
