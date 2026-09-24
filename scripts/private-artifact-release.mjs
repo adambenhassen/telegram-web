@@ -493,11 +493,24 @@ function optionalOption(args, name, fallback) {
   return value;
 }
 
+function reviewedTargetChanged(rootDirectory, previousCommit, targetCommit) {
+  assertCommitId(previousCommit, 'push before commit');
+  try {
+    execFileSync('git', ['diff', '--quiet', previousCommit, targetCommit, '--', REVIEWED_PRIVATE_TARGET], {
+      cwd: rootDirectory
+    });
+    return false;
+  } catch(cause) {
+    if(cause.status === 1) return true;
+    throw new Error('[MT] private artifact release cannot compare reviewed target commits', {cause});
+  }
+}
+
 function preparePublication(args) {
   const eventName = option(args, '--event', process.env.PRIVATE_ARTIFACT_EVENT || process.env.GITHUB_EVENT_NAME);
   const headBranch = option(args, '--head-branch', process.env.PRIVATE_ARTIFACT_HEAD_BRANCH);
   const conclusion = option(args, '--conclusion', process.env.PRIVATE_ARTIFACT_CONCLUSION);
-  const workflowName = option(args, '--workflow-name', process.env.PRIVATE_ARTIFACT_WORKFLOW_NAME);
+  const workflowName = optionalOption(args, '--workflow-name', process.env.PRIVATE_ARTIFACT_WORKFLOW_NAME);
   assertTrustedWorkflowRun({eventName, headBranch, conclusion, workflowName});
 
   const requestPath = option(args, '--request', '');
@@ -513,6 +526,16 @@ function preparePublication(args) {
     targetRef,
     workflowCommit
   });
+  if(eventName === 'push' && !reviewedTargetChanged(
+    ROOT_DIRECTORY,
+    optionalOption(args, '--previous-commit', process.env.PRIVATE_ARTIFACT_PREVIOUS_COMMIT),
+    target.commit
+  )) {
+    writeGithubOutputs({publish_private_artifact: false});
+    console.log('[private-artifact] publication skipped: reviewed target unchanged');
+    return;
+  }
+
   const outputDirectory = option(args, '--output', 'private-target-snapshot');
   const snapshot = snapshotReviewedPrivateTarget({
     rootDirectory: ROOT_DIRECTORY,
@@ -523,6 +546,7 @@ function preparePublication(args) {
   });
   const snapshotArtifactName = `private-mtproto-target-${target.commit}`;
   writeGithubOutputs({
+    publish_private_artifact: true,
     source_ref: target.ref,
     source_commit: target.commit,
     reviewed_workflow_commit: workflowCommit,
