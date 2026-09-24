@@ -181,14 +181,8 @@ describe('private artifact publication attestation', () => {
     const outputDirectory = join(directory, 'snapshot');
     const outputPath = join(directory, 'github-output');
     const commit = currentCommit();
-    const targetChangeCommit = execFileSync('git', ['log', '-1', '--format=%H', '--', REVIEWED_PRIVATE_TARGET], {
-      cwd: repositoryRoot,
-      encoding: 'utf8'
-    }).trim();
-    const previousCommit = execFileSync('git', ['rev-parse', `${targetChangeCommit}^`], {
-      cwd: repositoryRoot,
-      encoding: 'utf8'
-    }).trim();
+    // Supply the prior target tree directly so this case does not depend on local commit history.
+    const {tree: previousCommit, objectDirectory, alternateObjectDirectory} = previousTargetTree(directory);
 
     execFileSync(process.execPath, [
       'scripts/private-artifact-release.mjs',
@@ -204,7 +198,12 @@ describe('private artifact publication attestation', () => {
       '--output', outputDirectory
     ], {
       cwd: repositoryRoot,
-      env: {...process.env, GITHUB_OUTPUT: outputPath},
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        GIT_OBJECT_DIRECTORY: objectDirectory,
+        GIT_ALTERNATE_OBJECT_DIRECTORIES: alternateObjectDirectory
+      },
       encoding: 'utf8'
     });
 
@@ -667,4 +666,34 @@ function currentCommit() {
     cwd: repositoryRoot,
     encoding: 'utf8'
   }).trim();
+}
+
+function previousTargetTree(directory) {
+  const gitDirectory = join(directory, 'previous-target.git');
+  execFileSync('git', ['init', '--bare', '--quiet', gitDirectory], {cwd: repositoryRoot});
+
+  const previousTarget = JSON.parse(readFileSync(join(repositoryRoot, REVIEWED_PRIVATE_TARGET), 'utf8'));
+  previousTarget.MTPROTO_PRIVATE_ENDPOINT = 'wss://previous.example.test:2443/apiws';
+  const blob = execFileSync('git', ['--git-dir', gitDirectory, 'hash-object', '-w', '--stdin'], {
+    input: JSON.stringify(previousTarget, null, 2) + '\n',
+    encoding: 'utf8'
+  }).trim();
+  const targetTree = execFileSync('git', ['--git-dir', gitDirectory, 'mktree'], {
+    input: `100644 blob ${blob}\tprivate-mtproto-target.json\n`,
+    encoding: 'utf8'
+  }).trim();
+  const tree = execFileSync('git', ['--git-dir', gitDirectory, 'mktree'], {
+    input: `040000 tree ${targetTree}\tci\n`,
+    encoding: 'utf8'
+  }).trim();
+  const repositoryObjectDirectory = execFileSync('git', ['rev-parse', '--git-path', 'objects'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8'
+  }).trim();
+
+  return {
+    tree,
+    objectDirectory: join(gitDirectory, 'objects'),
+    alternateObjectDirectory: resolve(repositoryRoot, repositoryObjectDirectory)
+  };
 }
