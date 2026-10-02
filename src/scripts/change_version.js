@@ -37,7 +37,6 @@ for(const key in env) {
   lines.push(`${key}=${env[key]}`);
 }
 fs.writeFileSync('./.env', lines.join('\n') + '\n', 'utf-8');
-fs.writeFileSync('./public/version', env[VERSION_FULL_KEY], 'utf-8');
 
 if(changelog !== 'same') {
   const data = fs.readFileSync('./CHANGELOG.md');
