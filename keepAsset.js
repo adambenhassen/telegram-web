@@ -1,6 +1,5 @@
 module.exports = function(asset) {
   if(asset.includes('.xml') 
-    || asset.includes('version')
     || asset.includes('assets/')
     || asset.includes('changelogs/')
     || asset.includes('.webmanifest') 
