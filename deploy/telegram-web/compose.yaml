@@ -19,8 +19,8 @@ services:
         max-size: 10m
         max-file: "3"
     ports:
-      # This is the LXC's Tailscale address. Do not widen this to 0.0.0.0.
-      - "100.124.236.66:8080:8080"
+      # Keep Web on loopback behind Serve and prevent direct tailnet ingress.
+      - "127.0.0.1:8080:8080"
     volumes:
       - type: volume
         source: nginx_cache

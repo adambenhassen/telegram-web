@@ -51,6 +51,10 @@ jobs:
             docker logs "$container_name"
             exit 1
           fi
+          nginx_config="$(docker exec "$container_name" nginx -T 2>&1)"
+          grep --extended-regexp --quiet '^[[:space:]]*error_log /dev/stderr crit;$' <<<"$nginx_config"
+          grep --extended-regexp --quiet "^[[:space:]]*log_format classonly 'route_class=web status=\$status';$" <<<"$nginx_config"
+          grep --extended-regexp --quiet '^[[:space:]]*access_log /dev/stdout classonly;$' <<<"$nginx_config"
 
           ready=0
           for attempt in {1..30}; do
@@ -75,6 +79,17 @@ jobs:
           document_headers="$(docker exec "$container_name" wget --quiet --server-response --output-document=/dev/null http://127.0.0.1:8080/ 2>&1)"
           grep --fixed-strings --quiet 'Content-Security-Policy:' <<<"$document_headers"
           grep --fixed-strings --quiet "connect-src 'self'" <<<"$document_headers"
+
+          marker=invite-capability-log-check-only
+          docker exec "$container_name" wget --quiet --output-document=/dev/null \
+            --header "Referer: https://example.invalid/$marker" \
+            "http://127.0.0.1:8080/+${marker}?probe=${marker}"
+          web_logs="$(docker logs "$container_name" 2>&1)"
+          if grep --fixed-strings --quiet "$marker" <<<"$web_logs"; then
+            echo "synthetic invite marker found in Web logs"
+            exit 1
+          fi
+          grep --fixed-strings --line-regexp --quiet 'route_class=web status=200' <<<"$web_logs"
 
           worker_paths="$(find public -maxdepth 1 -type f -name 'index.worker-*.js' -printf '%f\n' | sort)"
           test -n "$worker_paths"
@@ -113,7 +128,7 @@ jobs:
             .services.web.read_only == true and
             (.services.web.security_opt | index("no-new-privileges:true")) and
             (.services.web.ports | length == 1) and
-            .services.web.ports[0].host_ip == "100.124.236.66" and
+            .services.web.ports[0].host_ip == "127.0.0.1" and
             .services.web.ports[0].target == 8080 and
             .services.web.ports[0].published == "8080" and
             .networks.web.name == "telegram-web-edge-net" and
