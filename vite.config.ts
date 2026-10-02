@@ -12,6 +12,7 @@ import {ServerOptions} from 'vite';
 import {watchLangFile} from './watch-lang.js';
 import devChecks from './scripts/dev-checks.mjs';
 import settingsSearchPlugin from './scripts/settings-search-plugin.mjs';
+import webVersionResourcePlugin from './src/scripts/webVersionResource';
 import {assertRunnableMtprotoTarget, resolveMtprotoTarget} from './scripts/mtproto-target.mjs';
 import {createPrivateArtifactPlugin} from './scripts/private-artifact.mjs';
 import path from 'path';
@@ -156,6 +157,7 @@ export default defineConfig({
     process.env.VITEST || process.env.TWEB_PREVIEW ? undefined : devChecks(rootDir),
     process.env.VITEST ? undefined : settingsSearchPlugin(rootDir),
     mtprotoTarget.mode === 'private' ? createPrivateArtifactPlugin(rootDir, mtprotoTarget) : undefined,
+    webVersionResourcePlugin(),
     solidPlugin(),
     handlebarsPlugin as any,
     USE_SELF_SIGNED_CERTS ? basicSsl(BASIC_SSL_CONFIG) : undefined,

@@ -23,6 +23,7 @@ import appNavigationController, {NavigationItem} from '@components/appNavigation
 import findUpClassName from '@helpers/dom/findUpClassName';
 import findUpTag from '@helpers/dom/findUpTag';
 import App from '@config/app';
+import {hasWebVersionUpdate} from '@lib/webVersion';
 import ButtonMenuToggle from '@components/buttonMenuToggle';
 import sessionStorage from '@lib/sessionStorage';
 import {attachClickEvent, CLICK_EVENT_NAME, simulateClickEvent} from '@helpers/dom/clickEvent';
@@ -364,10 +365,9 @@ export class AppSidebarLeft extends SidebarSlider {
     {
       const CHECK_UPDATE_INTERVAL = 1800e3;
       const checkUpdateInterval = setInterval(() => {
-        fetch('version', {cache: 'no-cache'})
-        .then((res) => (res.status === 200 && res.ok && res.text()) || Promise.reject())
-        .then((text) => {
-          if(text !== App.versionFull) {
+        hasWebVersionUpdate(App.versionFull)
+        .then((hasUpdate) => {
+          if(hasUpdate) {
             this.hasUpdate = true;
             clearInterval(checkUpdateInterval);
 
