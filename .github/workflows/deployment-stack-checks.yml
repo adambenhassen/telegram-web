@@ -53,7 +53,7 @@ jobs:
           fi
           nginx_config="$(docker exec "$container_name" nginx -T 2>&1)"
           grep --extended-regexp --quiet '^[[:space:]]*error_log /dev/stderr crit;$' <<<"$nginx_config"
-          grep --extended-regexp --quiet "^[[:space:]]*log_format classonly 'route_class=web status=\$status';$" <<<"$nginx_config"
+          grep --fixed-strings --quiet "log_format classonly 'route_class=web status=\$status';" <<<"$nginx_config"
           grep --extended-regexp --quiet '^[[:space:]]*access_log /dev/stdout classonly;$' <<<"$nginx_config"
 
           ready=0
