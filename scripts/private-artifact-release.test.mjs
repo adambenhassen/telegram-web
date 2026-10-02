@@ -1,6 +1,8 @@
 import {execFileSync} from 'node:child_process';
 import {
+  cpSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -650,6 +652,56 @@ describe('private artifact publication attestation', () => {
       sourceCommit: commit,
       artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
     })).toThrow(/digest/i);
+  });
+
+  it('preserves the hidden version resource through the isolated publisher transfer', () => {
+    const directory = temporaryArtifact();
+    const versionResource = '.well-known/telegram-web/version.txt';
+    const versionContents = '2.2 (676)\n';
+    mkdirSync(join(directory, '.well-known/telegram-web'), {recursive: true});
+    writeFileSync(join(directory, versionResource), versionContents);
+    const {target} = loadReviewedPrivateTarget();
+    const manifest = writePrivateArtifactManifest(directory, target, repositoryRoot);
+    const commit = currentCommit();
+    const transferDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-transfer-'));
+    temporaryDirectories.push(transferDirectory);
+    const downloadedDirectory = join(transferDirectory, 'dist-private');
+    const snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-artifact-transfer-snapshot-'));
+    temporaryDirectories.push(snapshotDirectory);
+    snapshotReviewedPrivateTarget({
+      rootDirectory: repositoryRoot,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      reviewedWorkflowCommit: commit,
+      outputDirectory: snapshotDirectory
+    });
+
+    const publisherWorkflow = readFileSync(
+      join(repositoryRoot, '.github/workflows/private-artifact.yml'),
+      'utf8'
+    );
+    for(const name of [
+      'Stage audited artifact for the isolated publisher',
+      'Publish artifact and sidecar as one release unit'
+    ]) {
+      const start = publisherWorkflow.indexOf(`      - name: ${name}\n`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const nextStep = publisherWorkflow.indexOf('\n      - name: ', start + 1);
+      const step = publisherWorkflow.slice(start, nextStep === -1 ? undefined : nextStep);
+      expect(step).toContain('uses: actions/upload-artifact@');
+      expect(step).toContain('          path: dist-private');
+      expect(step).toContain('          include-hidden-files: true');
+    }
+
+    cpSync(directory, downloadedDirectory, {recursive: true});
+    expect(readFileSync(join(downloadedDirectory, versionResource), 'utf8')).toBe(versionContents);
+    expect(verifyPublishedArtifact({
+      directory: downloadedDirectory,
+      snapshotDirectory,
+      sourceRef: 'refs/heads/master',
+      sourceCommit: commit,
+      artifactDigest: manifest.artifactDigest.slice('sha256:'.length)
+    }).sourceCommit).toBe(commit);
   });
 });
 

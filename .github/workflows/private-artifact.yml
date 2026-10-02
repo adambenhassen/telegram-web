@@ -208,6 +208,7 @@ jobs:
         with:
           name: private-mtproto-staged-${{ needs.publication-prepare.outputs.source_commit }}-${{ steps.verify.outputs.artifact_digest_hex }}
           path: dist-private
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 1
 
@@ -251,5 +252,6 @@ jobs:
         with:
           name: private-mtproto-${{ needs.publication-prepare.outputs.source_commit }}-${{ needs.private-build.outputs.artifact_digest_hex }}
           path: dist-private
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 30
