@@ -1,4 +1,4 @@
-## Telegram Web tailnet stack
+## Telegram Web loopback stack
 
 This is the deployment-only Compose project for the Telegram Web K static
 artifact. It is intentionally separate from the development Compose file at
@@ -16,13 +16,13 @@ docker compose up -d --build
 docker compose ps
 ```
 
-The SPA is available at `http://100.124.236.66:8080/` from the tailnet. The
-host-side port is explicitly bound to `tailscale0`; it must not be changed to
-`0.0.0.0` or published through Funnel.
+The SPA listens on `127.0.0.1:8080` for host-local proxies such as Serve. Keep
+this port loopback-only; the existing HTTPS Serve route remains the external
+entry point, and the Web container must not create direct tailnet ingress.
 
 The Compose network is not marked `internal`, because Docker must publish this
-host-side listener. The exact Tailscale host binding is the ingress boundary;
-the browser's `connect-src 'self'` CSP is the separate egress boundary below.
+host-side listener. The loopback host binding is the ingress boundary; the
+browser's `connect-src 'self'` CSP is the separate egress boundary below.
 
 The image copies the committed `public/` artifact directly. It does not run a
 Node or Vite build on the LXC. Resource isolation is provided by the target
@@ -43,5 +43,6 @@ project. `docker compose down` is safe and leaves that cache intact; never use
 `docker compose down -v` on this host.
 
 Rollback is the code revert followed by `docker compose up -d --build` from this
-directory. Verify success with `docker compose ps`, `curl -fsS http://100.124.236.66:8080/healthz`,
-and a tailnet browser loading the SPA shell.
+directory. Verify success with `docker compose ps`,
+`curl -fsS http://127.0.0.1:8080/healthz`, and a tailnet browser loading the
+SPA through the existing HTTPS Serve route.
