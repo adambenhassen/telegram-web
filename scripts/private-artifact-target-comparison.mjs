@@ -13,6 +13,47 @@ import {
 export const REQUEST_SHA256 = '4294d28b2f9e8f36fe7879974c5b6e472f2972d98a8b552e6290a45ebec0bbb0';
 export const ATTESTATION_BLOB = 'bd985171365ec77b3ecbe0fc1b6faf46b4ab2311';
 export const KEY_FILE_BLOB = 'e857e9c678defbf442e192fe9cbc6cd66589c734';
+export const COMPARISON_EXIT_CODES = Object.freeze({
+  COMMAND_INVALID: 2,
+  DATA_INVALID: 3,
+  REQUEST_RUN_ID_INVALID: 4,
+  REQUEST_RUN_COMMIT_INVALID: 5,
+  COMPARISON_TARGET_INVALID: 6,
+  REQUEST_RUN_METADATA_INVALID: 7,
+  REQUEST_RUN_OUTSIDE_HISTORY: 8,
+  REQUEST_ARTIFACT_INVALID: 9,
+  REQUEST_HASH_MISMATCH: 10,
+  ATTESTATION_BLOB_MISMATCH: 11,
+  KEY_FILE_BLOB_MISMATCH: 12,
+  REQUEST_TARGET_INVALID: 13,
+  SOURCE_PROVENANCE_INVALID: 14,
+  DIAGNOSTIC_TEMPORARY_DIRECTORY_INVALID: 15,
+  DIAGNOSTIC_OUTPUT_INVALID: 16,
+  COMPARISON_PROVENANCE_CHANGED: 17,
+  DIAGNOSTIC_DID_NOT_COMPLETE: 18,
+  UNEXPECTED_COMPARISON_ERROR: 19,
+  UNEXPECTED_ERROR: 20
+});
+
+const COMPARISON_ERROR_EXIT_CODES = new Map([
+  ['comparison command is invalid', COMPARISON_EXIT_CODES.COMMAND_INVALID],
+  ['comparison data is invalid', COMPARISON_EXIT_CODES.DATA_INVALID],
+  ['request run id is invalid', COMPARISON_EXIT_CODES.REQUEST_RUN_ID_INVALID],
+  ['request run commit is invalid', COMPARISON_EXIT_CODES.REQUEST_RUN_COMMIT_INVALID],
+  ['comparison target is invalid', COMPARISON_EXIT_CODES.COMPARISON_TARGET_INVALID],
+  ['request run metadata is invalid', COMPARISON_EXIT_CODES.REQUEST_RUN_METADATA_INVALID],
+  ['request run is outside diagnostic history', COMPARISON_EXIT_CODES.REQUEST_RUN_OUTSIDE_HISTORY],
+  ['request artifact is invalid', COMPARISON_EXIT_CODES.REQUEST_ARTIFACT_INVALID],
+  ['request hash does not match', COMPARISON_EXIT_CODES.REQUEST_HASH_MISMATCH],
+  ['attestation blob does not match', COMPARISON_EXIT_CODES.ATTESTATION_BLOB_MISMATCH],
+  ['key file blob does not match', COMPARISON_EXIT_CODES.KEY_FILE_BLOB_MISMATCH],
+  ['request target is invalid', COMPARISON_EXIT_CODES.REQUEST_TARGET_INVALID],
+  ['source provenance is invalid', COMPARISON_EXIT_CODES.SOURCE_PROVENANCE_INVALID],
+  ['diagnostic temporary directory is invalid', COMPARISON_EXIT_CODES.DIAGNOSTIC_TEMPORARY_DIRECTORY_INVALID],
+  ['diagnostic output is invalid', COMPARISON_EXIT_CODES.DIAGNOSTIC_OUTPUT_INVALID],
+  ['comparison provenance changed', COMPARISON_EXIT_CODES.COMPARISON_PROVENANCE_CHANGED],
+  ['diagnostic did not complete', COMPARISON_EXIT_CODES.DIAGNOSTIC_DID_NOT_COMPLETE]
+]);
 
 const REQUEST_WORKFLOW_PATH = '.github/workflows/private-artifact-request.yml';
 const REVIEWED_KEY_FILE = 'scripts/fixtures/private-mtproto-public.pem';
@@ -457,7 +498,11 @@ const invokedScript = process.argv[1] && resolve(process.argv[1]);
 if(invokedScript === fileURLToPath(import.meta.url)) {
   try {
     main();
-  } catch{
-    process.exitCode = 1;
+  } catch(error) {
+    if(error instanceof ComparisonError) {
+      process.exitCode = COMPARISON_ERROR_EXIT_CODES.get(error.message) ?? COMPARISON_EXIT_CODES.UNEXPECTED_COMPARISON_ERROR;
+    } else {
+      process.exitCode = COMPARISON_EXIT_CODES.UNEXPECTED_ERROR;
+    }
   }
 }

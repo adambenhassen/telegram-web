@@ -8,6 +8,7 @@ import {
   assertAllowlistedDiagnostic,
   assertFixedComparisonValues,
   assertMasterTargetRef,
+  COMPARISON_EXIT_CODES,
   diagnosticChildEnvironment,
   KEY_FILE_BLOB,
   REQUEST_SHA256,
@@ -283,6 +284,35 @@ describe('private artifact target comparison', () => {
     ].join('\n') + '\n');
     expect(result.stdout).not.toContain('canary');
     expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+
+  it('assigns distinct exit codes to every comparison failure', () => {
+    const exitCodes = Object.values(COMPARISON_EXIT_CODES);
+
+    expect(new Set(exitCodes).size).toBe(exitCodes.length);
+  });
+
+  it('reports a tampered request with its provenance exit code before diagnostics', () => {
+    const {directory, artifactDirectory} = requestArtifact('{"targetRef": "refs/heads/master"}\n');
+    const contextPath = join(directory, 'comparison.json');
+    writeFileSync(contextPath, JSON.stringify(validContext()));
+    const result = spawnSync(process.execPath, [
+      'scripts/private-artifact-target-comparison.mjs',
+      'diagnose',
+      contextPath,
+      artifactDirectory
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {
+        PATH: process.env.PATH,
+        RUNNER_TEMP: directory
+      }
+    });
+
+    expect(result.status).toBe(COMPARISON_EXIT_CODES.REQUEST_HASH_MISMATCH);
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toBe('');
   });
 
   it('defines one master-only, nonpublishing four-leg workflow', () => {
