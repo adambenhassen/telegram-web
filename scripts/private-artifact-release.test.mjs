@@ -1,5 +1,5 @@
 import {execFileSync, spawnSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash, createPublicKey, generateKeyPairSync} from 'node:crypto';
 import {
   cpSync,
   existsSync,
@@ -11,6 +11,7 @@ import {
 } from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
+import {pathToFileURL} from 'node:url';
 import {afterAll, describe, expect, it} from 'vitest';
 import * as privateArtifactRelease from './private-artifact-release.mjs';
 import {
@@ -45,6 +46,154 @@ afterAll(() => {
     rmSync(directory, {recursive: true, force: true});
   }
 });
+
+function writeDiagnosticKey(directory, contents, name = 'canary-public-key.pem') {
+  const keyPath = join(directory, name);
+  writeFileSync(keyPath, contents);
+  return keyPath;
+}
+
+function publicKeyPem(label, der) {
+  const payload = der.toString('base64').match(/.{1,64}/g).join('\n');
+  return `-----BEGIN ${label}-----\n${payload}\n-----END ${label}-----\n`;
+}
+
+function targetFailureCase(code, directory) {
+  const keyContents = readFileSync(resolve(repositoryRoot, 'scripts/fixtures/private-mtproto-public.pem'), 'utf8');
+  const validKeyPath = writeDiagnosticKey(directory, keyContents, 'canary-valid-public-key.pem');
+  const baseEnvironment = {
+    MTPROTO_TARGET_MODE: 'private',
+    MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test:2443/apiws',
+    MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: validKeyPath
+  };
+  const withOverrides = (overrides = {}) => ({...baseEnvironment, ...overrides});
+  const keyEnvironment = (contents) => withOverrides({
+    MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeDiagnosticKey(directory, contents)
+  });
+
+  switch(code) {
+    case 'MODE_INVALID':
+      return {environment: withOverrides({MTPROTO_TARGET_MODE: 'canary-mode'})};
+    case 'FIELDS_MISSING':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: ' '})};
+    case 'FIELD_UNRECOGNIZED':
+      return {environment: withOverrides({MTPROTO_PRIVATE_EXTRA: 'CANARY-UNRECOGNIZED-SECRET'})};
+    case 'ENDPOINT_PREFIX':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'https://canary-target.example.test/apiws?canary=query'})};
+    case 'ENDPOINT_PARSE':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test:bad/apiws?canary=query'})};
+    case 'ENDPOINT_SCHEME':
+      return {environment: baseEnvironment, fault: code};
+    case 'ENDPOINT_CREDENTIALS':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-user:canary-password@canary-target.example.test/apiws'})};
+    case 'ENDPOINT_QUERY':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws?canary=query'})};
+    case 'ENDPOINT_FRAGMENT':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws#canary-fragment'})};
+    case 'ENDPOINT_EMPTY_HOST':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://./apiws'})};
+    case 'ENDPOINT_TELEGRAM_ORG':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://telegram.org/apiws'})};
+    case 'KEY_FILE_OPEN':
+      return {environment: withOverrides({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: join(directory, 'canary-missing-key.pem')})};
+    case 'KEY_FILE_SHAPE':
+      return {environment: keyEnvironment('A'.repeat(16 * 1024 + 1))};
+    case 'KEY_FILE_READ':
+      return {environment: withOverrides({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws'}), fault: code};
+    case 'KEY_PRIVATE_MATERIAL':
+      return {environment: keyEnvironment('-----BEGIN RSA PRIVATE KEY-----\nCANARY-PRIVATE-KEY-MATERIAL\n-----END RSA PRIVATE KEY-----\n')};
+    case 'KEY_PEM_SHAPE':
+      return {environment: keyEnvironment('CANARY-KEY-MATERIAL-NOT-PEM')};
+    case 'KEY_BASE64_NONCANONICAL':
+      return {environment: keyEnvironment(keyContents.replace('AQAB', 'AQAB='))};
+    case 'KEY_PARSE':
+      return {environment: keyEnvironment(publicKeyPem('PUBLIC KEY', Buffer.from([1, 2, 3])))};
+    case 'KEY_DER_NONCANONICAL': {
+      const der = createPublicKey(keyContents).export({format: 'der', type: 'pkcs1'});
+      return {environment: keyEnvironment(publicKeyPem('RSA PUBLIC KEY', Buffer.concat([der, Buffer.from([1, 2, 3])]))) };
+    }
+    case 'KEY_JWK_MISSING': {
+      const {publicKey} = generateKeyPairSync('ec', {namedCurve: 'prime256v1'});
+      return {environment: keyEnvironment(publicKey.export({format: 'pem', type: 'spki'}))};
+    }
+    case 'KEY_SIZE_EXPONENT': {
+      const {publicKey} = generateKeyPairSync('rsa', {modulusLength: 1024});
+      return {environment: keyEnvironment(publicKey.export({format: 'pem', type: 'pkcs1'}))};
+    }
+    default:
+      throw new Error(`Unsupported diagnostic failure case: ${code}`);
+  }
+}
+
+function writeDiagnosticFaultPreloader(directory) {
+  const preloaderPath = join(directory, 'diagnostic-fault-preloader.mjs');
+  writeFileSync(preloaderPath, [
+    "import fs from 'node:fs';",
+    "import {syncBuiltinESMExports} from 'node:module';",
+    "import {URL as NativeURL} from 'node:url';",
+    "if(process.env.DIAGNOSTIC_TEST_FAULT === 'ENDPOINT_SCHEME') {",
+    '  globalThis.URL = class extends NativeURL { get protocol() { return \'https:\'; } };',
+    "} else if(process.env.DIAGNOSTIC_TEST_FAULT === 'KEY_FILE_READ') {",
+    '  const originalOpenSync = fs.openSync;',
+    '  const originalReadSync = fs.readSync;',
+    '  const keyDescriptors = new Set();',
+    '  let injected = false;',
+    '  fs.openSync = function(path, ...args) {',
+    '    const descriptor = originalOpenSync.call(this, path, ...args);',
+    "    if(typeof path === 'string' && path.endsWith('.pem') && path.includes('canary') && typeof args[0] === 'number' && (args[0] & fs.constants.O_NONBLOCK) !== 0) keyDescriptors.add(descriptor);",
+    '    return descriptor;',
+    '  };',
+    '  fs.readSync = function(...args) {',
+    '    if(keyDescriptors.has(args[0]) && !injected) {',
+    '      injected = true;',
+    '      const error = new Error(\'CANARY-READ-FAULT\');',
+    "      error.code = 'EIO';",
+    '      throw error;',
+    '    }',
+    '    return originalReadSync.apply(this, args);',
+    '  };',
+    '  syncBuiltinESMExports();',
+    '}'
+  ].join('\n') + '\n');
+  return preloaderPath;
+}
+
+function runTargetDiagnosticHarness(directory, failureCase, provenance) {
+  const harnessPath = join(directory, 'target-diagnostic-harness.mjs');
+  const resolverUrl = pathToFileURL(resolve(repositoryRoot, 'scripts/mtproto-target.mjs')).href;
+  const formatterUrl = pathToFileURL(resolve(repositoryRoot, 'scripts/private-artifact-release.mjs')).href;
+  writeFileSync(harnessPath, [
+    `import {resolveMtprotoTarget} from ${JSON.stringify(resolverUrl)};`,
+    `import {formatTargetDiagnostic} from ${JSON.stringify(formatterUrl)};`,
+    'let error;',
+    'let failed = false;',
+    'try { resolveMtprotoTarget(process.env); } catch(cause) { failed = true; error = cause; }',
+    'const provenance = JSON.parse(process.env.DIAGNOSTIC_TEST_PROVENANCE);',
+    'process.stdout.write(formatTargetDiagnostic({error, failed, provenance}) + String.fromCharCode(10));',
+    'if(failed) process.exitCode = 1;'
+  ].join('\n') + '\n');
+
+  const inheritedEnvironment = Object.fromEntries(Object.entries(process.env).filter(([name]) =>
+    name !== 'NODE_OPTIONS' && name !== 'MTPROTO_TARGET_MODE' && !name.startsWith('MTPROTO_PRIVATE_')
+  ));
+  const args = [];
+  if(failureCase.fault) {
+    args.push('--import', writeDiagnosticFaultPreloader(directory));
+  }
+  args.push(harnessPath);
+  return spawnSync(process.execPath, args, {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: {
+      ...inheritedEnvironment,
+      ...failureCase.environment,
+      ImageOS: 'ubuntu24',
+      ImageVersion: '20260927.320.1',
+      DIAGNOSTIC_TEST_FAULT: failureCase.fault || '',
+      DIAGNOSTIC_TEST_PROVENANCE: JSON.stringify(provenance)
+    }
+  });
+}
 
 function temporaryArtifact(indexDocument) {
   const directory = mkdtempSync(join(tmpdir(), 'private-artifact-release-'));
@@ -731,7 +880,7 @@ describe('private target diagnostics', () => {
     'ENDPOINT_QUERY', 'ENDPOINT_FRAGMENT', 'ENDPOINT_EMPTY_HOST', 'ENDPOINT_TELEGRAM_ORG',
     'KEY_FILE_OPEN', 'KEY_FILE_SHAPE', 'KEY_FILE_READ', 'KEY_PRIVATE_MATERIAL',
     'KEY_PEM_SHAPE', 'KEY_BASE64_NONCANONICAL', 'KEY_PARSE', 'KEY_DER_NONCANONICAL',
-    'KEY_JWK_MISSING', 'KEY_SIZE_EXPONENT', 'UNKNOWN'
+    'KEY_JWK_MISSING', 'KEY_SIZE_EXPONENT'
   ];
   const linePatterns = [
     /^failureCode=(?:NONE|MODE_INVALID|FIELDS_MISSING|FIELD_UNRECOGNIZED|ENDPOINT_PREFIX|ENDPOINT_PARSE|ENDPOINT_SCHEME|ENDPOINT_CREDENTIALS|ENDPOINT_QUERY|ENDPOINT_FRAGMENT|ENDPOINT_EMPTY_HOST|ENDPOINT_TELEGRAM_ORG|KEY_FILE_OPEN|KEY_FILE_SHAPE|KEY_FILE_READ|KEY_PRIVATE_MATERIAL|KEY_PEM_SHAPE|KEY_BASE64_NONCANONICAL|KEY_PARSE|KEY_DER_NONCANONICAL|KEY_JWK_MISSING|KEY_SIZE_EXPONENT|UNKNOWN)$/,
@@ -755,24 +904,23 @@ describe('private target diagnostics', () => {
     return privateArtifactRelease.formatTargetDiagnostic(options);
   }
 
-  it.each(failureCodes)('formats %s using only fixed allowlisted lines', (code) => {
+  it.each(failureCodes)('captures the real %s validator failure using only allowlisted lines', (code) => {
     const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-canary-'));
     temporaryDirectories.push(directory);
     const endpoint = 'wss://canary-target.example.test:2443/apiws?canary=query';
     const keyCanary = 'Q0FOREVZLUtFWS1NQVRFUklBTC0xMjM0NTY3ODkwQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=';
-    const keyCanaries = keyCanary.match(/[A-Za-z0-9+/=]{16,}/g) || [];
-    const keyPath = join(directory, 'canary-private-key.pem');
-    writeFileSync(keyPath, keyCanary);
-    const error = new Error(`Error: ${endpoint} ${keyPath} ${keyCanary}`);
-    error.code = code;
-    error.input = endpoint;
-    error.cause = new Error(`cause ${keyCanary}`);
+    const failureCase = targetFailureCase(code, directory);
+    const result = runTargetDiagnosticHarness(directory, failureCase, provenance);
+    const output = result.stdout + result.stderr;
+    const lines = result.stdout.trimEnd().split('\n');
 
-    const output = formatDiagnostic({error, provenance, runtime});
-    const lines = output.split('\n');
-    expect(lines).toEqual([
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe('');
+    const opensslLine = code === 'KEY_PARSE' ? lines[1] : undefined;
+    if(opensslLine) expect(opensslLine).toMatch(linePatterns[1]);
+    expect(output).toBe([
       `failureCode=${code}`,
-      ...(code === 'KEY_PARSE' ? ['opensslErrorCode=other'] : []),
+      ...(opensslLine ? [opensslLine] : []),
       `imageOS=${runtime.imageOS}`,
       `imageVersion=${runtime.imageVersion}`,
       `node=${runtime.node}`,
@@ -785,17 +933,13 @@ describe('private target diagnostics', () => {
       `attestationBlob=${provenance.attestationBlob}`,
       `keyFileBlob=${provenance.keyFileBlob}`,
       `targetRef=${provenance.targetRef}`
-    ]);
+    ].join('\n') + '\n');
     for(const line of lines) {
       expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
     }
-    expect(output).not.toContain('canary-target.example.test');
+    expect(output).not.toContain('canary');
     expect(output).not.toContain(endpoint);
-    expect(output).not.toContain(keyPath);
     expect(output).not.toContain(keyCanary);
-    for(const keyRun of keyCanaries) {
-      expect(output).not.toContain(keyRun);
-    }
     expect(output).not.toContain('cause');
     expect(output).not.toContain('Error:');
     expect(output).not.toContain('    at ');
@@ -848,13 +992,26 @@ describe('private target diagnostics', () => {
   });
 
   it('sanitizes unsafe runtime values and validates the OpenSSL parse code', () => {
-    const keyParseError = new Error('private parse detail', {
-      cause: Object.assign(new Error('private OpenSSL detail'), {code: 'ERR_OSSL_CANARY'})
-    });
-    keyParseError.code = 'KEY_PARSE';
-    const wrappedError = new Error('outer wrapper', {cause: keyParseError});
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-key-parse-'));
+    temporaryDirectories.push(directory);
+    const keyPath = writeDiagnosticKey(directory, publicKeyPem('PUBLIC KEY', Buffer.from([1, 2, 3])));
+    let error;
+    try {
+      resolveMtprotoTarget({
+        MTPROTO_TARGET_MODE: 'private',
+        MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws',
+        MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: keyPath
+      });
+    } catch(cause) {
+      error = cause;
+    }
+    expect(error).toMatchObject({code: 'KEY_PARSE'});
+    const causeCode = error.cause?.code;
+    const expectedOpenSslErrorCode = typeof causeCode === 'string' && /^ERR_OSSL_[A-Z0-9_]{1,56}$/.test(causeCode)
+      ? causeCode
+      : 'other';
     const output = formatDiagnostic({
-      error: wrappedError,
+      error,
       provenance,
       runtime: {
         imageOS: 'Ubuntu-26.04\ncanary',
@@ -866,7 +1023,7 @@ describe('private target diagnostics', () => {
 
     expect(output.split('\n')).toEqual([
       'failureCode=KEY_PARSE',
-      'opensslErrorCode=ERR_OSSL_CANARY',
+      `opensslErrorCode=${expectedOpenSslErrorCode}`,
       'imageOS=invalid',
       'imageVersion=invalid',
       'node=invalid',
@@ -882,6 +1039,7 @@ describe('private target diagnostics', () => {
     ]);
     expect(output).not.toContain('private');
     expect(output).not.toContain('canary');
+    expect(output).not.toContain(keyPath);
   });
 
   it('sanitizes untrusted provenance values before emitting them', () => {
@@ -1042,6 +1200,70 @@ describe('private target diagnostics', () => {
     expect(result.stdout).not.toContain(endpoint);
     expect(result.stdout).not.toContain(keyCanary);
     expect(result.stdout).not.toContain('error.input');
+    expect(result.stdout).not.toContain('Error:');
+    expect(result.stdout).not.toContain('    at ');
+    expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+
+  it.each(['ENDPOINT_SCHEME', 'KEY_FILE_READ'])('captures real CLI %s faults without stderr leakage', (code) => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-fault-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    const outputPath = join(directory, 'github-output');
+    const requestContents = JSON.stringify({targetRef: 'refs/heads/master'});
+    const endpoint = 'wss://canary-target.example.test:2443/apiws';
+    const keyContents = readFileSync(join(repositoryRoot, 'scripts/fixtures/private-mtproto-public.pem'), 'utf8');
+    writeFileSync(requestPath, requestContents);
+    writeFileSync(outputPath, '');
+    const {tree, targetBlob, keyBlob, gitEnvironment} = privateTargetTreeWithOverrides(directory, endpoint, keyContents);
+    const diagnosticWorkflowCommit = 'e'.repeat(40);
+    const requestRunId = '37141749542';
+    const result = spawnSync(process.execPath, [
+      '--import', writeDiagnosticFaultPreloader(directory),
+      'scripts/private-artifact-release.mjs',
+      'diagnose-target',
+      '--request', requestPath,
+      '--workflow-commit', tree
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...gitEnvironment,
+        DIAGNOSTIC_TEST_FAULT: code,
+        GITHUB_SHA: diagnosticWorkflowCommit,
+        PRIVATE_ARTIFACT_REQUEST_RUN_ID: requestRunId,
+        GITHUB_OUTPUT: outputPath,
+        ImageOS: 'ubuntu24',
+        ImageVersion: '20260927.320.1'
+      }
+    });
+    const requestSha256 = createHash('sha256').update(requestContents).digest('hex');
+    const expectedOutput = [
+      `failureCode=${code}`,
+      'imageOS=ubuntu24',
+      'imageVersion=20260927.320.1',
+      `node=${process.version}`,
+      `openssl=${process.versions.openssl}`,
+      `diagnosticWorkflowCommit=${diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${tree}`,
+      `sourceCommit=${tree}`,
+      `requestRunId=${requestRunId}`,
+      `requestSha256=${requestSha256}`,
+      `attestationBlob=${targetBlob}`,
+      `keyFileBlob=${keyBlob}`,
+      'targetRef=refs/heads/master'
+    ].join('\n') + '\n';
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe('');
+    expect(result.stdout + result.stderr).toBe(expectedOutput);
+    for(const line of result.stdout.trimEnd().split('\n')) {
+      expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
+    }
+    expect(result.stdout).not.toContain('canary-target.example.test');
+    expect(result.stdout).not.toContain(keyContents);
+    expect(result.stdout).not.toContain('CANARY-READ-FAULT');
     expect(result.stdout).not.toContain('Error:');
     expect(result.stdout).not.toContain('    at ');
     expect(readFileSync(outputPath, 'utf8')).toBe('');
