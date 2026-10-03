@@ -324,4 +324,11 @@ describe('private artifact target comparison', () => {
       if(body) expect(body).not.toContain('${{');
     }
   });
+
+  it('fetches git history for request ancestry validation in Pull Request CI', () => {
+    const workflow = readFileSync(join(repositoryRoot, '.github/workflows/ci.yml'), 'utf8');
+    const checkoutStep = workflow.split('      - name: Check out code\n')[1]?.split('\n      - name: ')[0];
+
+    expect(checkoutStep).toContain('fetch-depth: 0');
+  });
 });
