@@ -1,7 +1,7 @@
 {
   "MTPROTO_TARGET_MODE": "private",
-  "MTPROTO_PRIVATE_ENDPOINT": "wss://private.example.test:2443/apiws",
-  "MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE": "scripts/fixtures/private-mtproto-public.pem",
-  "publicKeySha256": "663eda958fd84c85e61a55f7afadf6ee265a1910dfe00e4a5e54f078b25cc904",
-  "fingerprint": "289f8aeb5aa17de3"
+  "MTPROTO_PRIVATE_ENDPOINT": "wss://telegram-server.tailaa4918.ts.net/apiws",
+  "MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE": "ci/private-mtproto-server-public.pem",
+  "publicKeySha256": "0250125c307c07c67bfec44343e4c80a8489050e2f7d21b863f2c00661c31c7f",
+  "fingerprint": "fbb62871f07fae2a"
 }
