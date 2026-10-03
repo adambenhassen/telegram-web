@@ -286,7 +286,7 @@ export function assertTrustedWorkflowRun({
   return {eventName, headBranch, conclusion, workflowName};
 }
 
-function readPublicationRequest(filePath, {onHash} = {}) {
+export function readPublicationRequest(filePath, {onHash} = {}) {
   if(typeof filePath !== 'string' || !filePath || !existsSync(filePath) || !statSync(filePath).isFile()) {
     fail('publication request is missing');
   }
