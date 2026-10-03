@@ -40,6 +40,236 @@ const environment = {
   MTPROTO_PRIVATE_ENDPOINT: 'wss://private.example.test:2443/apiws',
   MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: 'scripts/fixtures/private-mtproto-public.pem'
 };
+const privateArtifactWorkflowPath = join(repositoryRoot, '.github/workflows/private-artifact.yml');
+const privateArtifactWorkflowText = readFileSync(privateArtifactWorkflowPath, 'utf8');
+const pinnedSetupNodeAction = 'uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0';
+const pinnedNodeVersion = 'node-version: 24.18.0';
+const nodeVersionCheck = `test "$(node --version)" = 'v24.18.0'`;
+
+function privateWorkflowJob(workflow, name) {
+  const header = `  ${name}:\n`;
+  const start = workflow.indexOf(header);
+  if(start === -1) throw new Error(`Missing workflow job: ${name}`);
+  const contentStart = start + header.length;
+  const remainder = workflow.slice(contentStart);
+  const nextJob = remainder.search(/^  [a-z][a-z0-9-]*:\n/m);
+  return workflow.slice(start, nextJob === -1 ? undefined : contentStart + nextJob);
+}
+
+function privateWorkflowStep(job, name) {
+  const header = `      - name: ${name}\n`;
+  const start = job.indexOf(header);
+  if(start === -1) throw new Error(`Missing workflow step: ${name}`);
+  const contentStart = start + header.length;
+  const remainder = job.slice(contentStart);
+  const nextStep = remainder.search(/^      - name: /m);
+  return job.slice(start, nextStep === -1 ? undefined : contentStart + nextStep);
+}
+
+function movePrivateWorkflowStepBefore(job, stepName, targetName) {
+  const step = privateWorkflowStep(job, stepName);
+  const stepStart = job.indexOf(`      - name: ${stepName}\n`);
+  const withoutStep = job.slice(0, stepStart) + job.slice(stepStart + step.length);
+  const targetStart = withoutStep.indexOf(`      - name: ${targetName}\n`);
+  if(targetStart === -1) throw new Error(`Missing workflow step: ${targetName}`);
+  return withoutStep.slice(0, targetStart) + step + withoutStep.slice(targetStart);
+}
+
+function assertPinnedNodeSetup(step, {allowPnpmCache = false} = {}) {
+  const lines = step.split('\n').map((line) => line.trim());
+  const setupActionLines = lines.filter((line) => line.startsWith('uses: actions/setup-node@'));
+  const versionLines = lines.filter((line) => line.startsWith('node-version:'));
+  const cacheLines = lines.filter((line) => line.startsWith('cache'));
+
+  if(setupActionLines.length !== 1 || setupActionLines[0] !== pinnedSetupNodeAction) {
+    throw new Error('setup-node must use the reviewed v4.4.0 SHA');
+  }
+  if(versionLines.length !== 1 || versionLines[0] !== pinnedNodeVersion) {
+    throw new Error('setup-node must select the literal Node.js 24.18.0 version');
+  }
+  if(lines.some((line) => line.startsWith('node-version-file:') || line.startsWith('check-latest:'))) {
+    throw new Error('setup-node must not derive or update the selected runtime');
+  }
+  if(!allowPnpmCache && cacheLines.length > 0) throw new Error('setup-node cache is forbidden before validation');
+  if(allowPnpmCache && (cacheLines.length !== 1 || cacheLines[0] !== 'cache: pnpm')) {
+    throw new Error('only the later pnpm cache is allowed');
+  }
+  if(lines.some((line) => /^(registry-url|always-auth|scope|token):/i.test(line)) ||
+    /NODE_AUTH_TOKEN|npm_config_/i.test(step)) {
+    throw new Error('setup-node must not configure registry authentication');
+  }
+}
+
+function assertGuardedNodeInvocation(step, invocation) {
+  const lines = step.split('\n');
+  const runLine = lines.findIndex((line) => line.trim() === 'run: |');
+  if(runLine === -1) throw new Error('Node invocation must use a literal shell block');
+  const commands = lines.slice(runLine + 1).map((line) => line.trim()).filter(Boolean);
+  const nodeCommands = commands.filter((command) => /^node(?:\s|$)/.test(command));
+  if(commands[0] !== nodeVersionCheck) throw new Error('Node version must be checked immediately before invocation');
+  if(nodeCommands.length !== 1 || !commands[1]?.startsWith(invocation)) {
+    throw new Error(`Missing or unguarded Node invocation: ${invocation}`);
+  }
+}
+
+function assertPrivateBuildDependencyBoundary(job) {
+  const runtimeSetup = privateWorkflowStep(job, 'Set up Node.js 24.18.0 before target validation');
+  const preValidation = privateWorkflowStep(job, 'Validate the immutable target before installation');
+  const pnpmSetup = privateWorkflowStep(job, 'Set up pnpm');
+  const cachedNodeSetup = privateWorkflowStep(job, 'Set up Node.js with pnpm cache');
+  const install = privateWorkflowStep(job, 'Install dependencies');
+  const postValidation = privateWorkflowStep(job, 'Revalidate the immutable target after installation');
+  const positions = [runtimeSetup, preValidation, pnpmSetup, cachedNodeSetup, install, postValidation]
+    .map((step) => job.indexOf(step));
+
+  if(positions.some((position) => position === -1) || positions.some((position, index) =>
+    index > 0 && position <= positions[index - 1]
+  )) {
+    throw new Error('Private build setup, validation, cache, and install order is unsafe');
+  }
+
+  const beforeValidation = job.slice(0, positions[1]);
+  if(/pnpm\/action-setup|actions\/cache@|^\s*cache[\w-]*\s*:|pnpm install/m.test(beforeValidation)) {
+    throw new Error('Dependency setup, cache, and install must follow pre-install validation');
+  }
+
+  assertPinnedNodeSetup(runtimeSetup);
+  assertPinnedNodeSetup(cachedNodeSetup, {allowPnpmCache: true});
+}
+
+describe('private artifact workflow Node runtime', () => {
+  const guardedInvocations = [
+    [
+      'publication preparation',
+      'publication-prepare',
+      'Set up Node.js 24.18.0',
+      'Enforce the reviewed allowlist before installation',
+      'node scripts/private-artifact-release.mjs prepare'
+    ],
+    [
+      'pre-install target validation',
+      'private-build',
+      'Set up Node.js 24.18.0 before target validation',
+      'Validate the immutable target before installation',
+      'node scripts/private-artifact-release.mjs validate-target'
+    ],
+    [
+      'post-install target validation',
+      'private-build',
+      'Set up Node.js 24.18.0 before target validation',
+      'Revalidate the immutable target after installation',
+      'node scripts/private-artifact-release.mjs validate-target'
+    ],
+    [
+      'isolated publisher verification',
+      'private-publish',
+      'Set up Node.js 24.18.0',
+      'Reverify the downloaded unit in the isolated publisher',
+      'node "$RUNNER_TEMP/private-target-snapshot/publisher-verify.mjs"'
+    ]
+  ];
+  const primaryRuntimeSetups = [
+    ['publication-prepare', 'Set up Node.js 24.18.0'],
+    ['private-build', 'Set up Node.js 24.18.0 before target validation'],
+    ['private-publish', 'Set up Node.js 24.18.0']
+  ];
+
+  it.each(guardedInvocations)('pins and checks Node before %s', (_label, jobName, setupName, invocationName, command) => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, jobName);
+    const setup = privateWorkflowStep(job, setupName);
+    const invocation = privateWorkflowStep(job, invocationName);
+
+    assertPinnedNodeSetup(setup);
+    assertGuardedNodeInvocation(invocation, command);
+    expect(job.indexOf(setup)).toBeLessThan(job.indexOf(invocation));
+  });
+
+  it.each(primaryRuntimeSetups)('rejects an indirect runtime pin in %s', (jobName, setupName) => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, jobName);
+    const setup = privateWorkflowStep(job, setupName);
+    const changedVersion = setup.replace(pinnedNodeVersion, 'node-version-file: .nvmrc');
+
+    expect(changedVersion).not.toBe(setup);
+    expect(() => assertPinnedNodeSetup(changedVersion)).toThrow(/literal Node\.js 24\.18\.0/);
+  });
+
+  it.each(primaryRuntimeSetups)('rejects cache access in the pre-validation runtime setup for %s', (jobName, setupName) => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, jobName);
+    const setup = privateWorkflowStep(job, setupName);
+    const withCache = setup.replace(pinnedNodeVersion, `${pinnedNodeVersion}\n          cache: pnpm`);
+
+    expect(() => assertPinnedNodeSetup(withCache)).toThrow(/cache is forbidden/);
+  });
+
+  it.each(primaryRuntimeSetups)('rejects registry authentication overrides in %s', (jobName, setupName) => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, jobName);
+    const setup = privateWorkflowStep(job, setupName);
+    const withRegistry = setup.replace(pinnedNodeVersion, `${pinnedNodeVersion}\n          registry-url: https://registry.example.test`);
+
+    expect(() => assertPinnedNodeSetup(withRegistry)).toThrow(/registry authentication/);
+  });
+
+  it.each(guardedInvocations)('rejects a missing runtime check before %s', (_label, jobName, _setupName, invocationName, command) => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, jobName);
+    const invocation = privateWorkflowStep(job, invocationName);
+    const withoutCheck = invocation.replace(`${nodeVersionCheck}\n`, '');
+
+    expect(() => assertGuardedNodeInvocation(withoutCheck, command)).toThrow(/checked immediately before/);
+  });
+
+  it('keeps pnpm setup and its supported cache after immutable target validation', () => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, 'private-build');
+    assertPrivateBuildDependencyBoundary(job);
+
+    const cachedSetup = privateWorkflowStep(job, 'Set up Node.js with pnpm cache');
+    expect(cachedSetup).toContain('cache: pnpm');
+    expect(privateWorkflowStep(job, 'Check out the allowlisted target commit')).toContain('persist-credentials: false');
+  });
+
+  it.each(['Set up pnpm', 'Set up Node.js with pnpm cache', 'Install dependencies'])(
+    'rejects moving %s before immutable target validation',
+    (stepName) => {
+      const job = privateWorkflowJob(privateArtifactWorkflowText, 'private-build');
+      const unsafeOrder = movePrivateWorkflowStepBefore(job, stepName, 'Validate the immutable target before installation');
+
+      expect(() => assertPrivateBuildDependencyBoundary(unsafeOrder)).toThrow(/order is unsafe/);
+    }
+  );
+
+  it('rejects a standalone dependency cache before immutable target validation', () => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, 'private-build');
+    const withEarlyCache = job.replace(
+      '      - name: Validate the immutable target before installation\n',
+      '      - name: Restore pnpm cache\n        uses: actions/cache@v4\n\n      - name: Validate the immutable target before installation\n'
+    );
+
+    expect(withEarlyCache).not.toBe(job);
+    expect(() => assertPrivateBuildDependencyBoundary(withEarlyCache)).toThrow(/must follow pre-install validation/);
+  });
+
+  it('keeps the isolated publisher credential-free and adjacent to upload after verification', () => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, 'private-publish');
+    const runtimeSetup = privateWorkflowStep(job, 'Set up Node.js 24.18.0');
+    const firstDownload = privateWorkflowStep(job, 'Download the verified artifact');
+    const reverify = privateWorkflowStep(job, 'Reverify the downloaded unit in the isolated publisher');
+    const upload = privateWorkflowStep(job, 'Publish artifact and sidecar as one release unit');
+
+    expect(job.indexOf(runtimeSetup)).toBeLessThan(job.indexOf(firstDownload));
+    expect(job).not.toContain('actions/checkout@');
+    expect(job).not.toContain('pnpm install');
+    expect(job).not.toContain('pnpm/action-setup@');
+    expect(job.indexOf(upload)).toBe(job.indexOf(reverify) + reverify.length);
+  });
+
+  it('selects Node after the credential-free checkout in publication preparation', () => {
+    const job = privateWorkflowJob(privateArtifactWorkflowText, 'publication-prepare');
+    const checkout = privateWorkflowStep(job, 'Check out the reviewed workflow commit');
+    const setup = privateWorkflowStep(job, 'Set up Node.js 24.18.0');
+
+    expect(checkout).toContain('persist-credentials: false');
+    expect(job.indexOf(checkout)).toBeLessThan(job.indexOf(setup));
+  });
+});
 
 afterAll(() => {
   for(const directory of temporaryDirectories) {
