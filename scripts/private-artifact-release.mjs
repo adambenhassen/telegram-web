@@ -116,12 +116,6 @@ function safeDiagnosticValue(value, pattern) {
   return typeof value === 'string' && pattern.test(value) ? value : 'invalid';
 }
 
-function appendProvenance(lines, name, value, pattern) {
-  if(value !== undefined && value !== null) {
-    lines.push(`${name}=${safeDiagnosticValue(value, pattern)}`);
-  }
-}
-
 function diagnosticOpenSslErrorCode(error) {
   let current = diagnosticProperty(findDiagnosticFailure(error), 'cause');
   for(let depth = 0; depth < 16 && current; depth++) {
@@ -157,16 +151,16 @@ export function formatTargetDiagnostic({
     `node=${safeDiagnosticValue(runtime.node, /^v\d+\.\d+\.\d+$/)}`,
     `openssl=${safeDiagnosticValue(runtime.openssl, /^\d+\.\d+\.\d+[a-z0-9.+-]{0,16}$/)}`
   );
-  appendProvenance(lines, 'sourceCommit', provenance.sourceCommit, /^[0-9a-f]{40}$/);
-  appendProvenance(lines, 'workflowCommit', provenance.workflowCommit, /^[0-9a-f]{40}$/);
-  appendProvenance(
-    lines,
-    'targetRef',
-    provenance.targetRef,
-    /^(?:refs\/heads\/master|refs\/tags\/release(?:[/-])[A-Za-z0-9][A-Za-z0-9._/-]{0,255})$/
+  lines.push(
+    `diagnosticWorkflowCommit=${safeDiagnosticValue(provenance.diagnosticWorkflowCommit, /^[0-9a-f]{40}$/)}`,
+    `requestWorkflowCommit=${safeDiagnosticValue(provenance.requestWorkflowCommit, /^[0-9a-f]{40}$/)}`,
+    `sourceCommit=${safeDiagnosticValue(provenance.sourceCommit, /^[0-9a-f]{40}$/)}`,
+    `requestRunId=${safeDiagnosticValue(provenance.requestRunId, /^[0-9]{1,20}$/)}`,
+    `requestSha256=${safeDiagnosticValue(provenance.requestSha256, /^[0-9a-f]{64}$/)}`,
+    `attestationBlob=${safeDiagnosticValue(provenance.attestationBlob, /^[0-9a-f]{40}$/)}`,
+    `keyFileBlob=${safeDiagnosticValue(provenance.keyFileBlob, /^[0-9a-f]{40}$/)}`,
+    `targetRef=${safeDiagnosticValue(provenance.targetRef, /^refs\/heads\/master$/)}`
   );
-  appendProvenance(lines, 'requestSha256', provenance.requestSha256, /^[0-9a-f]{64}$/);
-  appendProvenance(lines, 'targetAttestationBlob', provenance.targetAttestationBlob, /^[0-9a-f]{40,64}$/);
   return lines.join('\n');
 }
 
@@ -292,15 +286,21 @@ export function assertTrustedWorkflowRun({
   return {eventName, headBranch, conclusion, workflowName};
 }
 
-function readPublicationRequest(filePath) {
+function readPublicationRequest(filePath, {onHash} = {}) {
   if(typeof filePath !== 'string' || !filePath || !existsSync(filePath) || !statSync(filePath).isFile()) {
     fail('publication request is missing');
   }
 
   let contents;
-  let request;
   try {
     contents = readFileSync(filePath);
+  } catch(cause) {
+    throw new Error('[MT] private artifact release publication request is invalid', {cause});
+  }
+  const requestSha256 = createHash('sha256').update(contents).digest('hex');
+  onHash?.(requestSha256);
+  let request;
+  try {
     request = JSON.parse(contents.toString('utf8'));
   } catch(cause) {
     throw new Error('[MT] private artifact release publication request is invalid', {cause});
@@ -309,7 +309,7 @@ function readPublicationRequest(filePath) {
   assertString(request.targetRef, 'publication request target ref');
   return {
     request,
-    requestSha256: createHash('sha256').update(contents).digest('hex')
+    requestSha256
   };
 }
 
@@ -637,38 +637,58 @@ function gitBlobId(rootDirectory, commit, filePath) {
   }).trim();
 }
 
+function reviewedKeyFilePath(rootDirectory, sourceCommit) {
+  let reviewed;
+  try {
+    reviewed = JSON.parse(gitFile(rootDirectory, sourceCommit, REVIEWED_PRIVATE_TARGET, {silent: true}));
+  } catch(cause) {
+    throw new Error('[MT] private artifact release reviewed target attestation is invalid', {cause});
+  }
+  assertExactFields(reviewed, REVIEWED_TARGET_FIELDS, 'reviewed target attestation');
+  assertString(reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE, 'reviewed target key file');
+  repositoryRelativePath(rootDirectory, reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE, 'reviewed target key file');
+  return reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE;
+}
+
 function diagnoseTarget(args) {
-  const provenance = {};
+  const provenance = {
+    diagnosticWorkflowCommit: process.env.GITHUB_SHA,
+    requestRunId: process.env.PRIVATE_ARTIFACT_REQUEST_RUN_ID
+  };
   let failed = false;
   let error;
   let snapshotDirectory;
   try {
     assertDiagnosticOptions(args);
     const requestPath = option(args, '--request', '');
-    const {request, requestSha256} = readPublicationRequest(requestPath);
+    const requestWorkflowCommit = option(args, '--workflow-commit', process.env.PRIVATE_ARTIFACT_WORKFLOW_COMMIT);
+    provenance.requestWorkflowCommit = requestWorkflowCommit;
+    const {request, requestSha256} = readPublicationRequest(requestPath, {
+      onHash: (value) => { provenance.requestSha256 = value; }
+    });
     provenance.requestSha256 = requestSha256;
     provenance.targetRef = request.targetRef;
-    const workflowCommit = option(args, '--workflow-commit', process.env.PRIVATE_ARTIFACT_WORKFLOW_COMMIT);
-    provenance.workflowCommit = workflowCommit;
     const target = resolvePublicationTarget({
       rootDirectory: ROOT_DIRECTORY,
       targetRef: request.targetRef,
-      workflowCommit,
+      workflowCommit: requestWorkflowCommit,
       silent: true
     });
     provenance.sourceCommit = target.commit;
     provenance.targetRef = target.ref;
-    provenance.targetAttestationBlob = gitBlobId(
+    provenance.attestationBlob = gitBlobId(
       ROOT_DIRECTORY,
       target.commit,
       REVIEWED_PRIVATE_TARGET
     );
+    const keyFilePath = reviewedKeyFilePath(ROOT_DIRECTORY, target.commit);
+    provenance.keyFileBlob = gitBlobId(ROOT_DIRECTORY, target.commit, keyFilePath);
     snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-'));
     snapshotReviewedPrivateTarget({
       rootDirectory: ROOT_DIRECTORY,
       sourceRef: target.ref,
       sourceCommit: target.commit,
-      reviewedWorkflowCommit: workflowCommit,
+      reviewedWorkflowCommit: requestWorkflowCommit,
       outputDirectory: snapshotDirectory,
       silent: true
     });

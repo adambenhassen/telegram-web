@@ -710,11 +710,14 @@ describe('private artifact publication attestation', () => {
 
 describe('private target diagnostics', () => {
   const provenance = {
+    diagnosticWorkflowCommit: 'e'.repeat(40),
+    requestWorkflowCommit: 'b'.repeat(40),
     sourceCommit: 'a'.repeat(40),
-    workflowCommit: 'b'.repeat(40),
+    requestRunId: '37141749542',
     targetRef: 'refs/heads/master',
     requestSha256: 'c'.repeat(64),
-    targetAttestationBlob: 'd'.repeat(40)
+    attestationBlob: 'd'.repeat(40),
+    keyFileBlob: 'f'.repeat(40)
   };
   const runtime = {
     imageOS: 'ubuntu24',
@@ -737,11 +740,14 @@ describe('private target diagnostics', () => {
     /^imageVersion=(?:[0-9.]{1,32}|invalid)$/,
     /^node=(?:v\d+\.\d+\.\d+|invalid)$/,
     /^openssl=(?:\d+\.\d+\.\d+[a-z0-9.+-]{0,16}|invalid)$/,
+    /^diagnosticWorkflowCommit=(?:[0-9a-f]{40}|invalid)$/,
+    /^requestWorkflowCommit=(?:[0-9a-f]{40}|invalid)$/,
     /^sourceCommit=(?:[0-9a-f]{40}|invalid)$/,
-    /^workflowCommit=(?:[0-9a-f]{40}|invalid)$/,
-    /^targetRef=(?:refs\/heads\/master|refs\/tags\/release(?:[/-])[A-Za-z0-9][A-Za-z0-9._/-]*|invalid)$/,
+    /^requestRunId=(?:[0-9]{1,20}|invalid)$/,
     /^requestSha256=(?:[0-9a-f]{64}|invalid)$/,
-    /^targetAttestationBlob=(?:[0-9a-f]{40,64}|invalid)$/
+    /^attestationBlob=(?:[0-9a-f]{40}|invalid)$/,
+    /^keyFileBlob=(?:[0-9a-f]{40}|invalid)$/,
+    /^targetRef=(?:refs\/heads\/master|invalid)$/
   ];
 
   function formatDiagnostic(options) {
@@ -771,11 +777,14 @@ describe('private target diagnostics', () => {
       `imageVersion=${runtime.imageVersion}`,
       `node=${runtime.node}`,
       `openssl=${runtime.openssl}`,
+      `diagnosticWorkflowCommit=${provenance.diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${provenance.requestWorkflowCommit}`,
       `sourceCommit=${provenance.sourceCommit}`,
-      `workflowCommit=${provenance.workflowCommit}`,
-      `targetRef=${provenance.targetRef}`,
+      `requestRunId=${provenance.requestRunId}`,
       `requestSha256=${provenance.requestSha256}`,
-      `targetAttestationBlob=${provenance.targetAttestationBlob}`
+      `attestationBlob=${provenance.attestationBlob}`,
+      `keyFileBlob=${provenance.keyFileBlob}`,
+      `targetRef=${provenance.targetRef}`
     ]);
     for(const line of lines) {
       expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
@@ -820,11 +829,14 @@ describe('private target diagnostics', () => {
       `imageVersion=${runtime.imageVersion}`,
       `node=${runtime.node}`,
       `openssl=${runtime.openssl}`,
+      `diagnosticWorkflowCommit=${provenance.diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${provenance.requestWorkflowCommit}`,
       `sourceCommit=${provenance.sourceCommit}`,
-      `workflowCommit=${provenance.workflowCommit}`,
-      `targetRef=${provenance.targetRef}`,
+      `requestRunId=${provenance.requestRunId}`,
       `requestSha256=${provenance.requestSha256}`,
-      `targetAttestationBlob=${provenance.targetAttestationBlob}`
+      `attestationBlob=${provenance.attestationBlob}`,
+      `keyFileBlob=${provenance.keyFileBlob}`,
+      `targetRef=${provenance.targetRef}`
     ]);
     expect(output).not.toContain('canary-target.example.test');
     expect(output).not.toContain(endpoint);
@@ -859,11 +871,14 @@ describe('private target diagnostics', () => {
       'imageVersion=invalid',
       'node=invalid',
       'openssl=invalid',
+      `diagnosticWorkflowCommit=${provenance.diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${provenance.requestWorkflowCommit}`,
       `sourceCommit=${provenance.sourceCommit}`,
-      `workflowCommit=${provenance.workflowCommit}`,
-      `targetRef=${provenance.targetRef}`,
+      `requestRunId=${provenance.requestRunId}`,
       `requestSha256=${provenance.requestSha256}`,
-      `targetAttestationBlob=${provenance.targetAttestationBlob}`
+      `attestationBlob=${provenance.attestationBlob}`,
+      `keyFileBlob=${provenance.keyFileBlob}`,
+      `targetRef=${provenance.targetRef}`
     ]);
     expect(output).not.toContain('private');
     expect(output).not.toContain('canary');
@@ -873,11 +888,14 @@ describe('private target diagnostics', () => {
     const output = formatDiagnostic({
       error: new Error('canary exception'),
       provenance: {
+        diagnosticWorkflowCommit: 'canary-diagnostic-workflow',
+        requestWorkflowCommit: 'canary-request-workflow',
         sourceCommit: 'canary-source',
-        workflowCommit: 'canary-workflow',
+        requestRunId: 'canary-run\nhost',
         targetRef: 'refs/heads/master\ncanary-host',
         requestSha256: 'canary-request',
-        targetAttestationBlob: 'canary-blob'
+        attestationBlob: 'canary-attestation-blob',
+        keyFileBlob: 'canary-key-blob'
       },
       runtime
     });
@@ -888,11 +906,14 @@ describe('private target diagnostics', () => {
       `imageVersion=${runtime.imageVersion}`,
       `node=${runtime.node}`,
       `openssl=${runtime.openssl}`,
+      'diagnosticWorkflowCommit=invalid',
+      'requestWorkflowCommit=invalid',
       'sourceCommit=invalid',
-      'workflowCommit=invalid',
-      'targetRef=invalid',
+      'requestRunId=invalid',
       'requestSha256=invalid',
-      'targetAttestationBlob=invalid'
+      'attestationBlob=invalid',
+      'keyFileBlob=invalid',
+      'targetRef=invalid'
     ]);
     for(const line of output.split('\n')) {
       expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
@@ -908,21 +929,35 @@ describe('private target diagnostics', () => {
     const requestContents = JSON.stringify({targetRef: 'refs/heads/master'});
     writeFileSync(requestPath, requestContents);
     writeFileSync(outputPath, '');
-    const commit = currentCommit();
-    const attestationBlob = execFileSync('git', ['rev-parse', '--verify', `${commit}:${REVIEWED_PRIVATE_TARGET}`], {
+    const requestWorkflowCommit = currentCommit();
+    const diagnosticWorkflowCommit = 'e'.repeat(40);
+    const requestRunId = '37141749542';
+    const attestationBlob = execFileSync('git', [
+      'rev-parse', '--verify', `${requestWorkflowCommit}:${REVIEWED_PRIVATE_TARGET}`
+    ], {
       cwd: repositoryRoot,
       encoding: 'utf8'
     }).trim();
+    const keyFileBlob = execFileSync('git', [
+      'rev-parse', '--verify', `${requestWorkflowCommit}:scripts/fixtures/private-mtproto-public.pem`
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8'
+    }).trim();
+    expect(attestationBlob).toBe('bd985171365ec77b3ecbe0fc1b6faf46b4ab2311');
+    expect(keyFileBlob).toBe('e857e9c678defbf442e192fe9cbc6cd66589c734');
     const result = spawnSync(process.execPath, [
       'scripts/private-artifact-release.mjs',
       'diagnose-target',
       '--request', requestPath,
-      '--workflow-commit', commit
+      '--workflow-commit', requestWorkflowCommit
     ], {
       cwd: repositoryRoot,
       encoding: 'utf8',
       env: {
         ...process.env,
+        GITHUB_SHA: diagnosticWorkflowCommit,
+        PRIVATE_ARTIFACT_REQUEST_RUN_ID: requestRunId,
         GITHUB_OUTPUT: outputPath,
         ImageOS: 'Ubuntu-26.04-canary',
         ImageVersion: '20260927.149.1\ncanary',
@@ -941,11 +976,14 @@ describe('private target diagnostics', () => {
       'imageVersion=invalid',
       `node=${process.version}`,
       `openssl=${process.versions.openssl}`,
-      `sourceCommit=${commit}`,
-      `workflowCommit=${commit}`,
-      'targetRef=refs/heads/master',
+      `diagnosticWorkflowCommit=${diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${requestWorkflowCommit}`,
+      `sourceCommit=${requestWorkflowCommit}`,
+      `requestRunId=${requestRunId}`,
       `requestSha256=${requestSha256}`,
-      `targetAttestationBlob=${attestationBlob}`
+      `attestationBlob=${attestationBlob}`,
+      `keyFileBlob=${keyFileBlob}`,
+      'targetRef=refs/heads/master'
     ].join('\n') + '\n');
     expect(readFileSync(outputPath, 'utf8')).toBe('');
   });
@@ -960,7 +998,9 @@ describe('private target diagnostics', () => {
     const requestContents = JSON.stringify({targetRef: 'refs/heads/master'});
     writeFileSync(requestPath, requestContents);
     writeFileSync(outputPath, '');
-    const {tree, targetBlob, gitEnvironment} = privateTargetTreeWithOverrides(directory, endpoint, keyCanary);
+    const {tree, targetBlob, keyBlob, gitEnvironment} = privateTargetTreeWithOverrides(directory, endpoint, keyCanary);
+    const diagnosticWorkflowCommit = 'e'.repeat(40);
+    const requestRunId = '37141749542';
     const result = spawnSync(process.execPath, [
       'scripts/private-artifact-release.mjs',
       'diagnose-target',
@@ -972,6 +1012,8 @@ describe('private target diagnostics', () => {
       env: {
         ...process.env,
         ...gitEnvironment,
+        GITHUB_SHA: diagnosticWorkflowCommit,
+        PRIVATE_ARTIFACT_REQUEST_RUN_ID: requestRunId,
         GITHUB_OUTPUT: outputPath,
         ImageOS: 'ubuntu26',
         ImageVersion: '20260927.149.1'
@@ -987,11 +1029,14 @@ describe('private target diagnostics', () => {
       'imageVersion=20260927.149.1',
       `node=${process.version}`,
       `openssl=${process.versions.openssl}`,
+      `diagnosticWorkflowCommit=${diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${tree}`,
       `sourceCommit=${tree}`,
-      `workflowCommit=${tree}`,
-      'targetRef=refs/heads/master',
+      `requestRunId=${requestRunId}`,
       `requestSha256=${requestSha256}`,
-      `targetAttestationBlob=${targetBlob}`
+      `attestationBlob=${targetBlob}`,
+      `keyFileBlob=${keyBlob}`,
+      'targetRef=refs/heads/master'
     ].join('\n') + '\n');
     expect(result.stdout).not.toContain('canary-target.example.test');
     expect(result.stdout).not.toContain(endpoint);
@@ -1011,6 +1056,8 @@ describe('private target diagnostics', () => {
     writeFileSync(requestPath, requestContents);
     writeFileSync(outputPath, '');
     const workflowCommit = '0'.repeat(40);
+    const diagnosticWorkflowCommit = 'e'.repeat(40);
+    const requestRunId = '37141749542';
     const result = spawnSync(process.execPath, [
       'scripts/private-artifact-release.mjs',
       'diagnose-target',
@@ -1019,7 +1066,12 @@ describe('private target diagnostics', () => {
     ], {
       cwd: repositoryRoot,
       encoding: 'utf8',
-      env: {...process.env, GITHUB_OUTPUT: outputPath}
+      env: {
+        ...process.env,
+        GITHUB_SHA: diagnosticWorkflowCommit,
+        PRIVATE_ARTIFACT_REQUEST_RUN_ID: requestRunId,
+        GITHUB_OUTPUT: outputPath
+      }
     });
     const requestSha256 = createHash('sha256').update(requestContents).digest('hex');
 
@@ -1031,10 +1083,66 @@ describe('private target diagnostics', () => {
       `imageVersion=${process.env.ImageVersion && /^[0-9.]{1,32}$/.test(process.env.ImageVersion) ? process.env.ImageVersion : 'invalid'}`,
       `node=${process.version}`,
       `openssl=${process.versions.openssl}`,
-      `workflowCommit=${workflowCommit}`,
-      'targetRef=refs/heads/master',
-      `requestSha256=${requestSha256}`
+      `diagnosticWorkflowCommit=${diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${workflowCommit}`,
+      'sourceCommit=invalid',
+      `requestRunId=${requestRunId}`,
+      `requestSha256=${requestSha256}`,
+      'attestationBlob=invalid',
+      'keyFileBlob=invalid',
+      'targetRef=refs/heads/master'
     ].join('\n') + '\n');
+    expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+
+  it('hashes request bytes before rejecting malformed JSON', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-request-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    const outputPath = join(directory, 'github-output');
+    const requestContents = '{"targetRef":"refs/heads/master"';
+    const diagnosticWorkflowCommit = 'e'.repeat(40);
+    const requestWorkflowCommit = currentCommit();
+    const requestRunId = '37141749542';
+    writeFileSync(requestPath, requestContents);
+    writeFileSync(outputPath, '');
+    const result = spawnSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'diagnose-target',
+      '--request', requestPath,
+      '--workflow-commit', requestWorkflowCommit
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_SHA: diagnosticWorkflowCommit,
+        PRIVATE_ARTIFACT_REQUEST_RUN_ID: requestRunId,
+        GITHUB_OUTPUT: outputPath
+      }
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe([
+      'failureCode=UNKNOWN',
+      `imageOS=${process.env.ImageOS && /^[a-z0-9]{1,32}$/.test(process.env.ImageOS) ? process.env.ImageOS : 'invalid'}`,
+      `imageVersion=${process.env.ImageVersion && /^[0-9.]{1,32}$/.test(process.env.ImageVersion) ? process.env.ImageVersion : 'invalid'}`,
+      `node=${process.version}`,
+      `openssl=${process.versions.openssl}`,
+      `diagnosticWorkflowCommit=${diagnosticWorkflowCommit}`,
+      `requestWorkflowCommit=${requestWorkflowCommit}`,
+      'sourceCommit=invalid',
+      `requestRunId=${requestRunId}`,
+      `requestSha256=${createHash('sha256').update(requestContents).digest('hex')}`,
+      'attestationBlob=invalid',
+      'keyFileBlob=invalid',
+      'targetRef=invalid'
+    ].join('\n') + '\n');
+    for(const line of result.stdout.trimEnd().split('\n')) {
+      expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
+    }
+    expect(result.stdout).not.toContain('{"targetRef"');
     expect(readFileSync(outputPath, 'utf8')).toBe('');
   });
 
@@ -1148,5 +1256,5 @@ function privateTargetTreeWithOverrides(directory, endpoint, keyContents) {
   execFileSync('git', ['update-index', '--add', '--cacheinfo', `100644,${keyBlob},ci/canary-private-target-public.pem`], gitOptions);
   const tree = execFileSync('git', ['write-tree'], gitOptions).trim();
 
-  return {tree, targetBlob, gitEnvironment};
+  return {tree, targetBlob, keyBlob, gitEnvironment};
 }
