@@ -46,6 +46,11 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Node.js 24.18.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+
       - name: Download the data-only publication request
         if: github.event_name == 'workflow_run'
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
@@ -65,17 +70,18 @@ jobs:
           PRIVATE_ARTIFACT_WORKFLOW_COMMIT: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
           PRIVATE_ARTIFACT_TARGET_REF: ${{ github.event_name == 'push' && 'refs/heads/master' || '' }}
           PRIVATE_ARTIFACT_PREVIOUS_COMMIT: ${{ github.event_name == 'push' && github.event.before || '' }}
-        run: >-
-          node scripts/private-artifact-release.mjs prepare
-          --event "$PRIVATE_ARTIFACT_EVENT"
-          --head-branch "$PRIVATE_ARTIFACT_HEAD_BRANCH"
-          --conclusion "$PRIVATE_ARTIFACT_CONCLUSION"
-          --workflow-name "$PRIVATE_ARTIFACT_WORKFLOW_NAME"
-          --request "$RUNNER_TEMP/private-artifact-request/request.json"
-          --target-ref "$PRIVATE_ARTIFACT_TARGET_REF"
-          --workflow-commit "$PRIVATE_ARTIFACT_WORKFLOW_COMMIT"
-          --previous-commit "$PRIVATE_ARTIFACT_PREVIOUS_COMMIT"
-          --output "$RUNNER_TEMP/private-target-snapshot"
+        run: |
+          test "$(node --version)" = 'v24.18.0'
+          node scripts/private-artifact-release.mjs prepare \
+            --event "$PRIVATE_ARTIFACT_EVENT" \
+            --head-branch "$PRIVATE_ARTIFACT_HEAD_BRANCH" \
+            --conclusion "$PRIVATE_ARTIFACT_CONCLUSION" \
+            --workflow-name "$PRIVATE_ARTIFACT_WORKFLOW_NAME" \
+            --request "$RUNNER_TEMP/private-artifact-request/request.json" \
+            --target-ref "$PRIVATE_ARTIFACT_TARGET_REF" \
+            --workflow-commit "$PRIVATE_ARTIFACT_WORKFLOW_COMMIT" \
+            --previous-commit "$PRIVATE_ARTIFACT_PREVIOUS_COMMIT" \
+            --output "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Stage immutable target attestation and publisher verifier
         if: steps.prepare.outputs.publish_private_artifact == 'true'
@@ -138,19 +144,26 @@ jobs:
           name: ${{ needs.publication-prepare.outputs.snapshot_artifact_name }}
           path: ${{ runner.temp }}/private-target-snapshot
 
+      - name: Set up Node.js 24.18.0 before target validation
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+
       - name: Validate the immutable target before installation
         env:
           MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
           MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
           MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
-        run: node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
+        run: |
+          test "$(node --version)" = 'v24.18.0'
+          node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Set up pnpm
         uses: pnpm/action-setup@0c17529a66aca453f9227af23103ed11469b1e47 # v4.0.0
         with:
           version: 11.16.0
 
-      - name: Set up Node.js
+      - name: Set up Node.js with pnpm cache
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: 24.18.0
@@ -164,7 +177,9 @@ jobs:
           MTPROTO_TARGET_MODE: ${{ needs.publication-prepare.outputs.target_mode }}
           MTPROTO_PRIVATE_ENDPOINT: ${{ needs.publication-prepare.outputs.private_endpoint }}
           MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: ${{ runner.temp }}/private-target-snapshot/${{ needs.publication-prepare.outputs.private_key_file }}
-        run: node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
+        run: |
+          test "$(node --version)" = 'v24.18.0'
+          node scripts/private-artifact-release.mjs validate-target --snapshot "$RUNNER_TEMP/private-target-snapshot"
 
       - name: Run private negative-input and route-matrix tests
         run: >-
@@ -226,6 +241,11 @@ jobs:
       actions: write
 
     steps:
+      - name: Set up Node.js 24.18.0
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+
       - name: Download the verified artifact
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
         with:
@@ -239,13 +259,14 @@ jobs:
           path: ${{ runner.temp }}/private-target-snapshot
 
       - name: Reverify the downloaded unit in the isolated publisher
-        run: >-
-          node "$RUNNER_TEMP/private-target-snapshot/publisher-verify.mjs"
-          --dist dist-private
-          --snapshot "$RUNNER_TEMP/private-target-snapshot"
-          --ref "${{ needs.publication-prepare.outputs.source_ref }}"
-          --commit "${{ needs.publication-prepare.outputs.source_commit }}"
-          --digest "${{ needs.private-build.outputs.artifact_digest_hex }}"
+        run: |
+          test "$(node --version)" = 'v24.18.0'
+          node "$RUNNER_TEMP/private-target-snapshot/publisher-verify.mjs" \
+            --dist dist-private \
+            --snapshot "$RUNNER_TEMP/private-target-snapshot" \
+            --ref "${{ needs.publication-prepare.outputs.source_ref }}" \
+            --commit "${{ needs.publication-prepare.outputs.source_commit }}" \
+            --digest "${{ needs.private-build.outputs.artifact_digest_hex }}"
 
       - name: Publish artifact and sidecar as one release unit
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
