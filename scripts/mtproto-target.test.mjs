@@ -54,6 +54,15 @@ function privateEnv(overrides = {}) {
   };
 }
 
+function targetError(environment) {
+  try {
+    resolveMtprotoTarget(environment);
+  } catch(error) {
+    return error;
+  }
+  throw new Error('Expected private target resolution to fail');
+}
+
 function writeKey(contents) {
   const directory = temporaryDirectory();
   const keyPath = join(directory, 'key.pem');
@@ -135,6 +144,43 @@ describe('MTProto build target', () => {
     });
 
     expect(() => resolveMtprotoTarget(env)).toThrow(/unrecognized.*MTPROTO_PRIVATE_SECRET/i);
+  });
+
+  it.each([
+    ['MODE_INVALID', () => privateEnv({MTPROTO_TARGET_MODE: 'privatee'})],
+    ['FIELDS_MISSING', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: ' '})],
+    ['FIELD_UNRECOGNIZED', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT_2: 'canary-key-value'})],
+    ['FIELD_UNRECOGNIZED', () => ({MTPROTO_TARGET_MODE: 'telegram', MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws'})],
+    ['ENDPOINT_PREFIX', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'https://canary-target.example.test/apiws?canary=query'})],
+    ['ENDPOINT_PARSE', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test:bad/apiws?canary=query'})],
+    ['ENDPOINT_CREDENTIALS', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-user:canary-password@canary-target.example.test/apiws'})],
+    ['ENDPOINT_QUERY', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws?canary=query'})],
+    ['ENDPOINT_FRAGMENT', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws#canary-fragment'})],
+    ['ENDPOINT_EMPTY_HOST', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'wss://./apiws'})],
+    ['ENDPOINT_TELEGRAM_ORG', () => privateEnv({MTPROTO_PRIVATE_ENDPOINT: 'wss://telegram.org/apiws'})],
+    ['KEY_FILE_OPEN', () => privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: '/canary-key/missing.pem'})],
+    ['KEY_FILE_SHAPE', () => privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey('A'.repeat(16 * 1024 + 1))})],
+    ['KEY_PRIVATE_MATERIAL', () => {
+      const {privateKey} = generateKeyPairSync('rsa', {modulusLength: 2048});
+      return privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey(privateKey.export({type: 'pkcs8', format: 'pem'}))});
+    }],
+    ['KEY_PEM_SHAPE', () => privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey('canary-key-material-not-a-pem')})],
+    ['KEY_BASE64_NONCANONICAL', () => privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey(fixtureKey.replace('AQAB', 'AQAB='))})],
+    ['KEY_PARSE', () => privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey(pem('PUBLIC KEY', Buffer.from([1, 2, 3])))})],
+    ['KEY_DER_NONCANONICAL', () => {
+      const canonicalDer = createPublicKey(fixtureKey).export({type: 'spki', format: 'der'});
+      return privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey(pem('PUBLIC KEY', Buffer.concat([canonicalDer, Buffer.from([1, 2, 3])])))});
+    }],
+    ['KEY_JWK_MISSING', () => {
+      const {publicKey} = generateKeyPairSync('ec', {namedCurve: 'prime256v1'});
+      return privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey(publicKey.export({type: 'spki', format: 'pem'}))});
+    }],
+    ['KEY_SIZE_EXPONENT', () => {
+      const {publicKey} = generateKeyPairSync('rsa', {modulusLength: 1024});
+      return privateEnv({MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: writeKey(publicKey.export({type: 'spki', format: 'pem'}))});
+    }]
+  ])('tags %s with its fixed diagnostic code', (code, makeEnvironment) => {
+    expect(targetError(makeEnvironment())).toMatchObject({code});
   });
 
   it.each([
@@ -282,6 +328,17 @@ describe('MTProto build target', () => {
       connectionTypes: ['client', 'upload', 'download']
     });
     expect(() => assertRunnableMtprotoTarget(target)).not.toThrow();
+  });
+
+  it('tags a route-lock invariant failure with UNKNOWN', () => {
+    const target = resolveMtprotoTarget(privateEnv());
+    let error;
+    try {
+      assertRunnableMtprotoTarget({...target, routeLock: undefined});
+    } catch(cause) {
+      error = cause;
+    }
+    expect(error).toMatchObject({code: 'UNKNOWN'});
   });
 
   it('allows a configured WSS endpoint whose path contains apiw1', () => {

@@ -4,11 +4,14 @@ import {
   appendFileSync,
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   writeFileSync
 } from 'node:fs';
-import {dirname, isAbsolute, relative, resolve} from 'node:path';
+import {tmpdir} from 'node:os';
+import {dirname, isAbsolute, join, relative, resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {resolveMtprotoTarget} from './mtproto-target.mjs';
 import {
@@ -33,6 +36,30 @@ const REVIEWED_TARGET_FIELDS = [
   'publicKeySha256',
   'fingerprint'
 ];
+const DIAGNOSTIC_FAILURE_CODES = new Set([
+  'MODE_INVALID',
+  'FIELDS_MISSING',
+  'FIELD_UNRECOGNIZED',
+  'ENDPOINT_PREFIX',
+  'ENDPOINT_PARSE',
+  'ENDPOINT_SCHEME',
+  'ENDPOINT_CREDENTIALS',
+  'ENDPOINT_QUERY',
+  'ENDPOINT_FRAGMENT',
+  'ENDPOINT_EMPTY_HOST',
+  'ENDPOINT_TELEGRAM_ORG',
+  'KEY_FILE_OPEN',
+  'KEY_FILE_SHAPE',
+  'KEY_FILE_READ',
+  'KEY_PRIVATE_MATERIAL',
+  'KEY_PEM_SHAPE',
+  'KEY_BASE64_NONCANONICAL',
+  'KEY_PARSE',
+  'KEY_DER_NONCANONICAL',
+  'KEY_JWK_MISSING',
+  'KEY_SIZE_EXPONENT',
+  'UNKNOWN'
+]);
 
 function fail(message) {
   throw new Error('[MT] private artifact release ' + message);
@@ -66,6 +93,77 @@ function sha256File(filePath) {
   return createHash('sha256').update(readFileSync(filePath)).digest('hex');
 }
 
+function diagnosticProperty(value, name) {
+  if(!value || (typeof value !== 'object' && typeof value !== 'function')) return undefined;
+  try {
+    return value[name];
+  } catch{
+    return undefined;
+  }
+}
+
+function findDiagnosticFailure(error) {
+  let current = error;
+  for(let depth = 0; depth < 16 && current; depth++) {
+    if(DIAGNOSTIC_FAILURE_CODES.has(diagnosticProperty(current, 'code'))) {
+      return current;
+    }
+    current = diagnosticProperty(current, 'cause');
+  }
+}
+
+function safeDiagnosticValue(value, pattern) {
+  return typeof value === 'string' && pattern.test(value) ? value : 'invalid';
+}
+
+function diagnosticOpenSslErrorCode(error) {
+  let current = diagnosticProperty(findDiagnosticFailure(error), 'cause');
+  for(let depth = 0; depth < 16 && current; depth++) {
+    const code = diagnosticProperty(current, 'code');
+    if(typeof code === 'string' && /^ERR_OSSL_[A-Z0-9_]{1,56}$/.test(code)) {
+      return code;
+    }
+    current = diagnosticProperty(current, 'cause');
+  }
+  return 'other';
+}
+
+export function formatTargetDiagnostic({
+  error,
+  failed = error !== undefined,
+  provenance = {},
+  runtime = {
+    imageOS: process.env.ImageOS,
+    imageVersion: process.env.ImageVersion,
+    node: process.version,
+    openssl: process.versions.openssl
+  }
+} = {}) {
+  const failure = failed ? findDiagnosticFailure(error) : undefined;
+  const failureCode = failed ? diagnosticProperty(failure, 'code') || 'UNKNOWN' : 'NONE';
+  const lines = [`failureCode=${failureCode}`];
+  if(failureCode === 'KEY_PARSE') {
+    lines.push(`opensslErrorCode=${diagnosticOpenSslErrorCode(error)}`);
+  }
+  lines.push(
+    `imageOS=${safeDiagnosticValue(runtime.imageOS, /^[a-z0-9]{1,32}$/)}`,
+    `imageVersion=${safeDiagnosticValue(runtime.imageVersion, /^[0-9.]{1,32}$/)}`,
+    `node=${safeDiagnosticValue(runtime.node, /^v\d+\.\d+\.\d+$/)}`,
+    `openssl=${safeDiagnosticValue(runtime.openssl, /^\d+\.\d+\.\d+[a-z0-9.+-]{0,16}$/)}`
+  );
+  lines.push(
+    `diagnosticWorkflowCommit=${safeDiagnosticValue(provenance.diagnosticWorkflowCommit, /^[0-9a-f]{40}$/)}`,
+    `requestWorkflowCommit=${safeDiagnosticValue(provenance.requestWorkflowCommit, /^[0-9a-f]{40}$/)}`,
+    `sourceCommit=${safeDiagnosticValue(provenance.sourceCommit, /^[0-9a-f]{40}$/)}`,
+    `requestRunId=${safeDiagnosticValue(provenance.requestRunId, /^[0-9]{1,20}$/)}`,
+    `requestSha256=${safeDiagnosticValue(provenance.requestSha256, /^[0-9a-f]{64}$/)}`,
+    `attestationBlob=${safeDiagnosticValue(provenance.attestationBlob, /^[0-9a-f]{40}$/)}`,
+    `keyFileBlob=${safeDiagnosticValue(provenance.keyFileBlob, /^[0-9a-f]{40}$/)}`,
+    `targetRef=${safeDiagnosticValue(provenance.targetRef, /^refs\/heads\/master$/)}`
+  );
+  return lines.join('\n');
+}
+
 function repositoryRelativePath(rootDirectory, pathValue, label) {
   if(isAbsolute(pathValue)) {
     fail(`${label} must be repository-relative`);
@@ -89,12 +187,14 @@ function gitCommit(rootDirectory) {
   }
 }
 
-function gitFile(rootDirectory, gitRef, filePath) {
+function gitFile(rootDirectory, gitRef, filePath, {silent = false} = {}) {
   try {
-    return execFileSync('git', ['show', `${gitRef}:${filePath}`], {
+    const options = {
       cwd: rootDirectory,
       encoding: 'utf8'
-    });
+    };
+    if(silent) options.stdio = ['ignore', 'pipe', 'pipe'];
+    return execFileSync('git', ['show', `${gitRef}:${filePath}`], options);
   } catch(cause) {
     throw new Error(`[MT] private artifact release cannot read ${filePath} from ${gitRef}`, {cause});
   }
@@ -119,12 +219,13 @@ function validateReviewedReleaseRefs(value) {
 export function loadReviewedReleaseRefs({
   rootDirectory = ROOT_DIRECTORY,
   gitRef = 'refs/remotes/origin/master',
-  filePath
+  filePath,
+  silent = false
 } = {}) {
   let reviewed;
   try {
     reviewed = JSON.parse(filePath ? readFileSync(filePath, 'utf8') :
-      gitFile(rootDirectory, gitRef, REVIEWED_RELEASE_REFS));
+      gitFile(rootDirectory, gitRef, REVIEWED_RELEASE_REFS, {silent}));
   } catch(cause) {
     if(cause instanceof Error && cause.message.startsWith('[MT] private artifact release cannot read')) {
       throw cause;
@@ -185,32 +286,49 @@ export function assertTrustedWorkflowRun({
   return {eventName, headBranch, conclusion, workflowName};
 }
 
-export function loadPublicationRequest(filePath) {
+function readPublicationRequest(filePath, {onHash} = {}) {
   if(typeof filePath !== 'string' || !filePath || !existsSync(filePath) || !statSync(filePath).isFile()) {
     fail('publication request is missing');
   }
 
+  let contents;
+  try {
+    contents = readFileSync(filePath);
+  } catch(cause) {
+    throw new Error('[MT] private artifact release publication request is invalid', {cause});
+  }
+  const requestSha256 = createHash('sha256').update(contents).digest('hex');
+  onHash?.(requestSha256);
   let request;
   try {
-    request = JSON.parse(readFileSync(filePath, 'utf8'));
+    request = JSON.parse(contents.toString('utf8'));
   } catch(cause) {
     throw new Error('[MT] private artifact release publication request is invalid', {cause});
   }
   assertExactFields(request, ['targetRef'], 'publication request');
   assertString(request.targetRef, 'publication request target ref');
-  return request;
+  return {
+    request,
+    requestSha256
+  };
+}
+
+export function loadPublicationRequest(filePath) {
+  return readPublicationRequest(filePath).request;
 }
 
 export function resolvePublicationTarget({
   rootDirectory = ROOT_DIRECTORY,
   targetRef,
-  workflowCommit
+  workflowCommit,
+  silent = false
 }) {
   assertString(targetRef, 'publication target ref');
   assertCommitId(workflowCommit, 'reviewed workflow commit');
   const reviewedReleaseRefs = loadReviewedReleaseRefs({
     rootDirectory,
-    gitRef: workflowCommit
+    gitRef: workflowCommit,
+    silent
   });
   const targetCommit = targetRef === MASTER_REF
     ? workflowCommit
@@ -227,7 +345,8 @@ export function snapshotReviewedPrivateTarget({
   sourceRef,
   sourceCommit,
   reviewedWorkflowCommit = sourceCommit,
-  outputDirectory
+  outputDirectory,
+  silent = false
 }) {
   assertString(sourceRef, 'publication source ref');
   assertCommitId(sourceCommit, 'publication source commit');
@@ -239,7 +358,7 @@ export function snapshotReviewedPrivateTarget({
   mkdirSync(outputDirectory, {recursive: true});
   const targetPath = resolve(outputDirectory, REVIEWED_PRIVATE_TARGET);
   mkdirSync(dirname(targetPath), {recursive: true});
-  writeFileSync(targetPath, gitFile(rootDirectory, sourceCommit, REVIEWED_PRIVATE_TARGET));
+  writeFileSync(targetPath, gitFile(rootDirectory, sourceCommit, REVIEWED_PRIVATE_TARGET, {silent}));
 
   let reviewed;
   try {
@@ -255,25 +374,28 @@ export function snapshotReviewedPrivateTarget({
   writeFileSync(keyPath, gitFile(
     rootDirectory,
     sourceCommit,
-    reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE
+    reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE,
+    {silent}
   ));
 
   const reviewedRefsPath = resolve(outputDirectory, REVIEWED_RELEASE_REFS);
   mkdirSync(dirname(reviewedRefsPath), {recursive: true});
-  writeFileSync(reviewedRefsPath, gitFile(rootDirectory, reviewedWorkflowCommit, REVIEWED_RELEASE_REFS));
+  writeFileSync(reviewedRefsPath, gitFile(rootDirectory, reviewedWorkflowCommit, REVIEWED_RELEASE_REFS, {silent}));
   const reviewedReleaseRefs = loadReviewedReleaseRefs({filePath: reviewedRefsPath});
   const target = loadReviewedPrivateTarget({rootDirectory: outputDirectory});
 
   const publisherVerifier = gitFile(
     rootDirectory,
     reviewedWorkflowCommit,
-    'scripts/private-artifact-publish-verify.mjs'
+    'scripts/private-artifact-publish-verify.mjs',
+    {silent}
   );
   writeFileSync(resolve(outputDirectory, 'publisher-verify.mjs'), publisherVerifier);
   const publisherCspParser = gitFile(
     rootDirectory,
     reviewedWorkflowCommit,
-    'scripts/private-artifact-csp.mjs'
+    'scripts/private-artifact-csp.mjs',
+    {silent}
   );
   writeFileSync(resolve(outputDirectory, 'private-artifact-csp.mjs'), publisherCspParser);
   writeFileSync(resolve(outputDirectory, 'snapshot.json'), JSON.stringify({
@@ -493,6 +615,109 @@ function optionalOption(args, name, fallback) {
   return value;
 }
 
+function assertDiagnosticOptions(args) {
+  const allowedOptions = new Set(['--request', '--workflow-commit']);
+  const seenOptions = new Set();
+  for(let index = 0; index < args.length; index++) {
+    const name = args[index];
+    const value = args[index + 1];
+    if(!allowedOptions.has(name) || seenOptions.has(name) || !value || value.startsWith('--')) {
+      fail('diagnose-target options are invalid');
+    }
+    seenOptions.add(name);
+    index++;
+  }
+}
+
+function gitBlobId(rootDirectory, commit, filePath) {
+  return execFileSync('git', ['rev-parse', '--verify', `${commit}:${filePath}`], {
+    cwd: rootDirectory,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe']
+  }).trim();
+}
+
+function reviewedKeyFilePath(rootDirectory, sourceCommit) {
+  let reviewed;
+  try {
+    reviewed = JSON.parse(gitFile(rootDirectory, sourceCommit, REVIEWED_PRIVATE_TARGET, {silent: true}));
+  } catch(cause) {
+    throw new Error('[MT] private artifact release reviewed target attestation is invalid', {cause});
+  }
+  assertExactFields(reviewed, REVIEWED_TARGET_FIELDS, 'reviewed target attestation');
+  assertString(reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE, 'reviewed target key file');
+  repositoryRelativePath(rootDirectory, reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE, 'reviewed target key file');
+  return reviewed.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE;
+}
+
+function diagnoseTarget(args) {
+  const provenance = {
+    diagnosticWorkflowCommit: process.env.GITHUB_SHA,
+    requestRunId: process.env.PRIVATE_ARTIFACT_REQUEST_RUN_ID
+  };
+  let failed = false;
+  let error;
+  let snapshotDirectory;
+  try {
+    assertDiagnosticOptions(args);
+    const requestPath = option(args, '--request', '');
+    const requestWorkflowCommit = option(args, '--workflow-commit', process.env.PRIVATE_ARTIFACT_WORKFLOW_COMMIT);
+    provenance.requestWorkflowCommit = requestWorkflowCommit;
+    const {request, requestSha256} = readPublicationRequest(requestPath, {
+      onHash: (value) => { provenance.requestSha256 = value; }
+    });
+    provenance.requestSha256 = requestSha256;
+    provenance.targetRef = request.targetRef;
+    const target = resolvePublicationTarget({
+      rootDirectory: ROOT_DIRECTORY,
+      targetRef: request.targetRef,
+      workflowCommit: requestWorkflowCommit,
+      silent: true
+    });
+    provenance.sourceCommit = target.commit;
+    provenance.targetRef = target.ref;
+    provenance.attestationBlob = gitBlobId(
+      ROOT_DIRECTORY,
+      target.commit,
+      REVIEWED_PRIVATE_TARGET
+    );
+    const keyFilePath = reviewedKeyFilePath(ROOT_DIRECTORY, target.commit);
+    provenance.keyFileBlob = gitBlobId(ROOT_DIRECTORY, target.commit, keyFilePath);
+    snapshotDirectory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-'));
+    snapshotReviewedPrivateTarget({
+      rootDirectory: ROOT_DIRECTORY,
+      sourceRef: target.ref,
+      sourceCommit: target.commit,
+      reviewedWorkflowCommit: requestWorkflowCommit,
+      outputDirectory: snapshotDirectory,
+      silent: true
+    });
+  } catch(cause) {
+    failed = true;
+    error = cause;
+  } finally {
+    if(snapshotDirectory) {
+      try {
+        rmSync(snapshotDirectory, {recursive: true, force: true});
+      } catch(cleanupError) {
+        if(failed) {
+          const combinedError = new Error('private target diagnostic cleanup failed', {cause: error});
+          combinedError.cleanupError = cleanupError;
+          error = combinedError;
+        } else {
+          failed = true;
+          error = cleanupError;
+        }
+      }
+    }
+  }
+
+  process.stdout.write(`${formatTargetDiagnostic({error, failed, provenance})}\n`);
+  if(failed) {
+    process.exitCode = 1;
+  }
+}
+
 function reviewedTargetChanged(rootDirectory, previousCommit, targetCommit) {
   assertCommitId(previousCommit, 'push before commit');
   try {
@@ -564,6 +789,10 @@ function main() {
   const [command = 'verify', ...args] = process.argv.slice(2);
   if(command === 'validate-ref') {
     validatePublicationRef();
+    return;
+  }
+  if(command === 'diagnose-target') {
+    diagnoseTarget(args);
     return;
   }
   if(command === 'prepare') {

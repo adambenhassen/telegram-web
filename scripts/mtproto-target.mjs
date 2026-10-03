@@ -12,6 +12,12 @@ const PRIVATE_ROUTE_LOCK = {
   connectionTypes: ['client', 'upload', 'download']
 };
 
+function targetError(code, message, options) {
+  const error = new Error(message, options);
+  error.code = code;
+  return error;
+}
+
 function decodeBase64Url(value) {
   return Buffer.from(value.replaceAll('-', '+').replaceAll('_', '/'), 'base64');
 }
@@ -27,35 +33,35 @@ function serializeTlBytes(bytes) {
 
 function normalizeEndpoint(value) {
   if(!/^wss:\/\/[^/]/i.test(value)) {
-    throw new Error(`${PRIVATE_ENDPOINT} must contain a host`);
+    throw targetError('ENDPOINT_PREFIX', `${PRIVATE_ENDPOINT} must contain a host`);
   }
 
   let endpoint;
   try {
     endpoint = new URL(value);
   } catch{
-    throw new Error(`${PRIVATE_ENDPOINT} must be an absolute wss URL`);
+    throw targetError('ENDPOINT_PARSE', `${PRIVATE_ENDPOINT} must be an absolute wss URL`);
   }
 
   if(endpoint.protocol !== 'wss:') {
-    throw new Error(`${PRIVATE_ENDPOINT} must use wss`);
+    throw targetError('ENDPOINT_SCHEME', `${PRIVATE_ENDPOINT} must use wss`);
   }
   if(endpoint.username || endpoint.password) {
-    throw new Error(`${PRIVATE_ENDPOINT} must not contain credentials`);
+    throw targetError('ENDPOINT_CREDENTIALS', `${PRIVATE_ENDPOINT} must not contain credentials`);
   }
   if(value.includes('?') || endpoint.search) {
-    throw new Error(`${PRIVATE_ENDPOINT} must not contain a query`);
+    throw targetError('ENDPOINT_QUERY', `${PRIVATE_ENDPOINT} must not contain a query`);
   }
   if(value.includes('#') || endpoint.hash) {
-    throw new Error(`${PRIVATE_ENDPOINT} must not contain a fragment`);
+    throw targetError('ENDPOINT_FRAGMENT', `${PRIVATE_ENDPOINT} must not contain a fragment`);
   }
 
   const hostname = endpoint.hostname.toLowerCase().replace(/\.+$/, '');
   if(!hostname) {
-    throw new Error(`${PRIVATE_ENDPOINT} must contain a host`);
+    throw targetError('ENDPOINT_EMPTY_HOST', `${PRIVATE_ENDPOINT} must contain a host`);
   }
   if(hostname === 'telegram.org' || hostname.endsWith('.telegram.org')) {
-    throw new Error(`${PRIVATE_ENDPOINT} must not target telegram.org`);
+    throw targetError('ENDPOINT_TELEGRAM_ORG', `${PRIVATE_ENDPOINT} must not target telegram.org`);
   }
 
   endpoint.hostname = hostname;
@@ -65,11 +71,14 @@ function normalizeEndpoint(value) {
 function readPublicKey(filePath) {
   let contents;
   let descriptor;
+  let failureCode = 'KEY_FILE_OPEN';
   try {
     descriptor = openSync(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
+    failureCode = 'KEY_FILE_READ';
     const stats = fstatSync(descriptor);
     if(!stats.isFile() || stats.size > MAX_PUBLIC_KEY_FILE_BYTES) {
-      throw new Error('Invalid private MTProto public key file');
+      failureCode = 'KEY_FILE_SHAPE';
+      throw targetError('KEY_FILE_SHAPE', 'Invalid private MTProto public key file');
     }
 
     const buffer = Buffer.alloc(MAX_PUBLIC_KEY_FILE_BYTES + 1);
@@ -82,11 +91,13 @@ function readPublicKey(filePath) {
       length += bytesRead;
     }
     if(length > MAX_PUBLIC_KEY_FILE_BYTES) {
-      throw new Error('Invalid private MTProto public key file');
+      failureCode = 'KEY_FILE_SHAPE';
+      throw targetError('KEY_FILE_SHAPE', 'Invalid private MTProto public key file');
     }
     contents = buffer.subarray(0, length).toString('utf8');
-  } catch{
-    throw new Error('Unable to read private MTProto public key file');
+  } catch(cause) {
+    const code = cause instanceof Error && cause.code === 'KEY_FILE_SHAPE' ? cause.code : failureCode;
+    throw targetError(code, 'Unable to read private MTProto public key file');
   } finally {
     if(descriptor !== undefined) {
       try {
@@ -96,7 +107,7 @@ function readPublicKey(filePath) {
   }
 
   if(/-----BEGIN [^-]*PRIVATE KEY-----/.test(contents)) {
-    throw new Error('Private MTProto key file contains private key material');
+    throw targetError('KEY_PRIVATE_MATERIAL', 'Private MTProto key file contains private key material');
   }
 
   const publicKey = contents.trim().replaceAll('\r\n', '\n');
@@ -104,31 +115,31 @@ function readPublicKey(filePath) {
     /^-----BEGIN (PUBLIC KEY|RSA PUBLIC KEY)-----\n([A-Za-z0-9+/=\n]+)\n-----END \1-----$/
   );
   if(!match) {
-    throw new Error('Private MTProto key file must contain exactly one public RSA key');
+    throw targetError('KEY_PEM_SHAPE', 'Private MTProto key file must contain exactly one public RSA key');
   }
 
   const payload = match[2].replaceAll('\n', '');
   const inputDer = Buffer.from(payload, 'base64');
   if(inputDer.toString('base64') !== payload) {
-    throw new Error('Private MTProto key file must contain exactly one public RSA key');
+    throw targetError('KEY_BASE64_NONCANONICAL', 'Private MTProto key file must contain exactly one public RSA key');
   }
 
   let key;
   try {
     key = createPublicKey(publicKey);
   } catch(cause) {
-    throw new Error('Private MTProto key file must contain exactly one public RSA key', {cause});
+    throw targetError('KEY_PARSE', 'Private MTProto key file must contain exactly one public RSA key', {cause});
   }
 
   const keyType = match[1] === 'PUBLIC KEY' ? 'spki' : 'pkcs1';
   const canonicalDer = key.export({format: 'der', type: keyType});
   if(!inputDer.equals(canonicalDer)) {
-    throw new Error('Private MTProto key file must contain exactly one public RSA key');
+    throw targetError('KEY_DER_NONCANONICAL', 'Private MTProto key file must contain exactly one public RSA key');
   }
 
   const jwk = key.export({format: 'jwk'});
   if(key.asymmetricKeyType !== 'rsa' || !jwk.n || !jwk.e) {
-    throw new Error('Private MTProto key must be a 2048-bit RSA key with exponent 65537');
+    throw targetError('KEY_JWK_MISSING', 'Private MTProto key must be a 2048-bit RSA key with exponent 65537');
   }
 
   const modulus = decodeBase64Url(jwk.n);
@@ -136,7 +147,7 @@ function readPublicKey(filePath) {
   const modulusBits = modulus.length * 8 - Math.clz32(modulus[0]) + 24;
   const exponentValue = exponent.reduce((value, byte) => value * 256 + byte, 0);
   if(modulusBits !== 2048 || exponentValue !== 65537) {
-    throw new Error('Private MTProto key must be a 2048-bit RSA key with exponent 65537');
+    throw targetError('KEY_SIZE_EXPONENT', 'Private MTProto key must be a 2048-bit RSA key with exponent 65537');
   }
 
   const serializedKey = Buffer.concat([serializeTlBytes(modulus), serializeTlBytes(exponent)]);
@@ -165,7 +176,7 @@ export function resolveMtprotoTarget(env) {
   const privateFieldNames = Object.keys(env).filter((name) => name.startsWith('MTPROTO_PRIVATE_'));
   const unknownField = privateFieldNames.find((name) => !PRIVATE_FIELDS.has(name));
   if(unknownField) {
-    throw new Error(`Unrecognized private MTProto target field: ${unknownField}`);
+    throw targetError('FIELD_UNRECOGNIZED', `Unrecognized private MTProto target field: ${unknownField}`);
   }
 
   const mode = env.MTPROTO_TARGET_MODE;
@@ -173,11 +184,11 @@ export function resolveMtprotoTarget(env) {
     return {mode: 'telegram'};
   }
   if(mode !== 'private' && mode !== 'telegram') {
-    throw new Error('MTPROTO_TARGET_MODE must be either telegram or private');
+    throw targetError('MODE_INVALID', 'MTPROTO_TARGET_MODE must be either telegram or private');
   }
   if(mode === 'telegram') {
     if(privateFieldNames.length) {
-      throw new Error('Private MTProto target fields require MTPROTO_TARGET_MODE=private');
+      throw targetError('FIELD_UNRECOGNIZED', 'Private MTProto target fields require MTPROTO_TARGET_MODE=private');
     }
     return {mode: 'telegram'};
   }
@@ -186,7 +197,7 @@ export function resolveMtprotoTarget(env) {
   const keyFileValue = env[PRIVATE_KEY_FILE];
   if(typeof endpointValue !== 'string' || !endpointValue.trim() ||
     typeof keyFileValue !== 'string' || !keyFileValue.trim()) {
-    throw new Error(`Private mode requires non-empty ${PRIVATE_ENDPOINT} and ${PRIVATE_KEY_FILE}`);
+    throw targetError('FIELDS_MISSING', `Private mode requires non-empty ${PRIVATE_ENDPOINT} and ${PRIVATE_KEY_FILE}`);
   }
 
   const endpoint = normalizeEndpoint(endpointValue.trim());
@@ -211,7 +222,7 @@ export function assertRunnableMtprotoTarget(target) {
     routeLock.transport !== 'websocket' ||
     JSON.stringify(routeLock.dcIds) !== JSON.stringify(PRIVATE_ROUTE_LOCK.dcIds) ||
     JSON.stringify(routeLock.connectionTypes) !== JSON.stringify(PRIVATE_ROUTE_LOCK.connectionTypes)) {
-    throw new Error('Private MTProto target contains inconsistent route-lock metadata');
+    throw targetError('UNKNOWN', 'Private MTProto target contains inconsistent route-lock metadata');
   }
 }
 
