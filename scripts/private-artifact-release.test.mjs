@@ -1,4 +1,5 @@
-import {execFileSync} from 'node:child_process';
+import {execFileSync, spawnSync} from 'node:child_process';
+import {createHash} from 'node:crypto';
 import {
   cpSync,
   existsSync,
@@ -11,6 +12,7 @@ import {
 import {tmpdir} from 'node:os';
 import {join, resolve} from 'node:path';
 import {afterAll, describe, expect, it} from 'vitest';
+import * as privateArtifactRelease from './private-artifact-release.mjs';
 import {
   REVIEWED_PRIVATE_TARGET,
   REQUEST_WORKFLOW_NAME,
@@ -22,6 +24,7 @@ import {
   snapshotReviewedPrivateTarget,
   verifyPrivateArtifactRelease
 } from './private-artifact-release.mjs';
+import {resolveMtprotoTarget} from './mtproto-target.mjs';
 import {verifyPublishedArtifact} from './private-artifact-publish-verify.mjs';
 import {
   privateContentSecurityPolicy,
@@ -705,6 +708,366 @@ describe('private artifact publication attestation', () => {
   });
 });
 
+describe('private target diagnostics', () => {
+  const provenance = {
+    sourceCommit: 'a'.repeat(40),
+    workflowCommit: 'b'.repeat(40),
+    targetRef: 'refs/heads/master',
+    requestSha256: 'c'.repeat(64),
+    targetAttestationBlob: 'd'.repeat(40)
+  };
+  const runtime = {
+    imageOS: 'ubuntu24',
+    imageVersion: '20260927.320.1',
+    node: 'v24.18.0',
+    openssl: process.versions.openssl
+  };
+  const failureCodes = [
+    'MODE_INVALID', 'FIELDS_MISSING', 'FIELD_UNRECOGNIZED',
+    'ENDPOINT_PREFIX', 'ENDPOINT_PARSE', 'ENDPOINT_SCHEME', 'ENDPOINT_CREDENTIALS',
+    'ENDPOINT_QUERY', 'ENDPOINT_FRAGMENT', 'ENDPOINT_EMPTY_HOST', 'ENDPOINT_TELEGRAM_ORG',
+    'KEY_FILE_OPEN', 'KEY_FILE_SHAPE', 'KEY_FILE_READ', 'KEY_PRIVATE_MATERIAL',
+    'KEY_PEM_SHAPE', 'KEY_BASE64_NONCANONICAL', 'KEY_PARSE', 'KEY_DER_NONCANONICAL',
+    'KEY_JWK_MISSING', 'KEY_SIZE_EXPONENT', 'UNKNOWN'
+  ];
+  const linePatterns = [
+    /^failureCode=(?:NONE|MODE_INVALID|FIELDS_MISSING|FIELD_UNRECOGNIZED|ENDPOINT_PREFIX|ENDPOINT_PARSE|ENDPOINT_SCHEME|ENDPOINT_CREDENTIALS|ENDPOINT_QUERY|ENDPOINT_FRAGMENT|ENDPOINT_EMPTY_HOST|ENDPOINT_TELEGRAM_ORG|KEY_FILE_OPEN|KEY_FILE_SHAPE|KEY_FILE_READ|KEY_PRIVATE_MATERIAL|KEY_PEM_SHAPE|KEY_BASE64_NONCANONICAL|KEY_PARSE|KEY_DER_NONCANONICAL|KEY_JWK_MISSING|KEY_SIZE_EXPONENT|UNKNOWN)$/,
+    /^opensslErrorCode=(?:ERR_OSSL_[A-Z0-9_]{1,56}|other)$/,
+    /^imageOS=(?:[a-z0-9]{1,32}|invalid)$/,
+    /^imageVersion=(?:[0-9.]{1,32}|invalid)$/,
+    /^node=(?:v\d+\.\d+\.\d+|invalid)$/,
+    /^openssl=(?:\d+\.\d+\.\d+[a-z0-9.+-]{0,16}|invalid)$/,
+    /^sourceCommit=(?:[0-9a-f]{40}|invalid)$/,
+    /^workflowCommit=(?:[0-9a-f]{40}|invalid)$/,
+    /^targetRef=(?:refs\/heads\/master|refs\/tags\/release(?:[/-])[A-Za-z0-9][A-Za-z0-9._/-]*|invalid)$/,
+    /^requestSha256=(?:[0-9a-f]{64}|invalid)$/,
+    /^targetAttestationBlob=(?:[0-9a-f]{40,64}|invalid)$/
+  ];
+
+  function formatDiagnostic(options) {
+    expect(typeof privateArtifactRelease.formatTargetDiagnostic).toBe('function');
+    return privateArtifactRelease.formatTargetDiagnostic(options);
+  }
+
+  it.each(failureCodes)('formats %s using only fixed allowlisted lines', (code) => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-canary-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://canary-target.example.test:2443/apiws?canary=query';
+    const keyCanary = 'Q0FOREVZLUtFWS1NQVRFUklBTC0xMjM0NTY3ODkwQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=';
+    const keyCanaries = keyCanary.match(/[A-Za-z0-9+/=]{16,}/g) || [];
+    const keyPath = join(directory, 'canary-private-key.pem');
+    writeFileSync(keyPath, keyCanary);
+    const error = new Error(`Error: ${endpoint} ${keyPath} ${keyCanary}`);
+    error.code = code;
+    error.input = endpoint;
+    error.cause = new Error(`cause ${keyCanary}`);
+
+    const output = formatDiagnostic({error, provenance, runtime});
+    const lines = output.split('\n');
+    expect(lines).toEqual([
+      `failureCode=${code}`,
+      ...(code === 'KEY_PARSE' ? ['opensslErrorCode=other'] : []),
+      `imageOS=${runtime.imageOS}`,
+      `imageVersion=${runtime.imageVersion}`,
+      `node=${runtime.node}`,
+      `openssl=${runtime.openssl}`,
+      `sourceCommit=${provenance.sourceCommit}`,
+      `workflowCommit=${provenance.workflowCommit}`,
+      `targetRef=${provenance.targetRef}`,
+      `requestSha256=${provenance.requestSha256}`,
+      `targetAttestationBlob=${provenance.targetAttestationBlob}`
+    ]);
+    for(const line of lines) {
+      expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
+    }
+    expect(output).not.toContain('canary-target.example.test');
+    expect(output).not.toContain(endpoint);
+    expect(output).not.toContain(keyPath);
+    expect(output).not.toContain(keyCanary);
+    for(const keyRun of keyCanaries) {
+      expect(output).not.toContain(keyRun);
+    }
+    expect(output).not.toContain('cause');
+    expect(output).not.toContain('Error:');
+    expect(output).not.toContain('    at ');
+  });
+
+  it('redacts error.input from a real malformed endpoint validation', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-canary-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://canary-target.example.test:bad/apiws?canary=query';
+    const keyCanary = 'Q0FOREVZLUtFWS1NQVRFUklBTC0xMjM0NTY3ODkwQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=';
+    const keyPath = join(directory, 'canary-private-key.pem');
+    writeFileSync(keyPath, keyCanary);
+    let error;
+    try {
+      resolveMtprotoTarget({
+        MTPROTO_TARGET_MODE: 'private',
+        MTPROTO_PRIVATE_ENDPOINT: endpoint,
+        MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: keyPath
+      });
+    } catch(cause) {
+      error = cause;
+    }
+    error.input = endpoint;
+    error.cause = new Error(`cause ${keyCanary}`);
+
+    const output = formatDiagnostic({error, provenance, runtime});
+    expect(error).toMatchObject({code: 'ENDPOINT_PARSE'});
+    expect(output.split('\n')).toEqual([
+      'failureCode=ENDPOINT_PARSE',
+      `imageOS=${runtime.imageOS}`,
+      `imageVersion=${runtime.imageVersion}`,
+      `node=${runtime.node}`,
+      `openssl=${runtime.openssl}`,
+      `sourceCommit=${provenance.sourceCommit}`,
+      `workflowCommit=${provenance.workflowCommit}`,
+      `targetRef=${provenance.targetRef}`,
+      `requestSha256=${provenance.requestSha256}`,
+      `targetAttestationBlob=${provenance.targetAttestationBlob}`
+    ]);
+    expect(output).not.toContain('canary-target.example.test');
+    expect(output).not.toContain(endpoint);
+    expect(output).not.toContain(keyPath);
+    expect(output).not.toContain(keyCanary);
+    expect(output).not.toContain('cause');
+    expect(output).not.toContain('Error:');
+    expect(output).not.toContain('    at ');
+  });
+
+  it('sanitizes unsafe runtime values and validates the OpenSSL parse code', () => {
+    const keyParseError = new Error('private parse detail', {
+      cause: Object.assign(new Error('private OpenSSL detail'), {code: 'ERR_OSSL_CANARY'})
+    });
+    keyParseError.code = 'KEY_PARSE';
+    const wrappedError = new Error('outer wrapper', {cause: keyParseError});
+    const output = formatDiagnostic({
+      error: wrappedError,
+      provenance,
+      runtime: {
+        imageOS: 'Ubuntu-26.04\ncanary',
+        imageVersion: '20260927.149.1\ncanary',
+        node: 'node-canary',
+        openssl: 'openssl-canary'
+      }
+    });
+
+    expect(output.split('\n')).toEqual([
+      'failureCode=KEY_PARSE',
+      'opensslErrorCode=ERR_OSSL_CANARY',
+      'imageOS=invalid',
+      'imageVersion=invalid',
+      'node=invalid',
+      'openssl=invalid',
+      `sourceCommit=${provenance.sourceCommit}`,
+      `workflowCommit=${provenance.workflowCommit}`,
+      `targetRef=${provenance.targetRef}`,
+      `requestSha256=${provenance.requestSha256}`,
+      `targetAttestationBlob=${provenance.targetAttestationBlob}`
+    ]);
+    expect(output).not.toContain('private');
+    expect(output).not.toContain('canary');
+  });
+
+  it('sanitizes untrusted provenance values before emitting them', () => {
+    const output = formatDiagnostic({
+      error: new Error('canary exception'),
+      provenance: {
+        sourceCommit: 'canary-source',
+        workflowCommit: 'canary-workflow',
+        targetRef: 'refs/heads/master\ncanary-host',
+        requestSha256: 'canary-request',
+        targetAttestationBlob: 'canary-blob'
+      },
+      runtime
+    });
+
+    expect(output.split('\n')).toEqual([
+      'failureCode=UNKNOWN',
+      `imageOS=${runtime.imageOS}`,
+      `imageVersion=${runtime.imageVersion}`,
+      `node=${runtime.node}`,
+      `openssl=${runtime.openssl}`,
+      'sourceCommit=invalid',
+      'workflowCommit=invalid',
+      'targetRef=invalid',
+      'requestSha256=invalid',
+      'targetAttestationBlob=invalid'
+    ]);
+    for(const line of output.split('\n')) {
+      expect(linePatterns.some((pattern) => pattern.test(line))).toBe(true);
+    }
+    expect(output).not.toContain('canary');
+  });
+
+  it('emits the reviewed attestation diagnosis and leaves GITHUB_OUTPUT empty', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    const outputPath = join(directory, 'github-output');
+    const requestContents = JSON.stringify({targetRef: 'refs/heads/master'});
+    writeFileSync(requestPath, requestContents);
+    writeFileSync(outputPath, '');
+    const commit = currentCommit();
+    const attestationBlob = execFileSync('git', ['rev-parse', '--verify', `${commit}:${REVIEWED_PRIVATE_TARGET}`], {
+      cwd: repositoryRoot,
+      encoding: 'utf8'
+    }).trim();
+    const result = spawnSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'diagnose-target',
+      '--request', requestPath,
+      '--workflow-commit', commit
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        GITHUB_OUTPUT: outputPath,
+        ImageOS: 'Ubuntu-26.04-canary',
+        ImageVersion: '20260927.149.1\ncanary',
+        PRIVATE_ARTIFACT_TARGET_REF: 'refs/tags/release/canary',
+        MTPROTO_PRIVATE_ENDPOINT: 'wss://canary-target.example.test/apiws?canary=query',
+        MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE: '/canary-key/private.pem'
+      }
+    });
+    const requestSha256 = createHash('sha256').update(requestContents).digest('hex');
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe([
+      'failureCode=NONE',
+      'imageOS=invalid',
+      'imageVersion=invalid',
+      `node=${process.version}`,
+      `openssl=${process.versions.openssl}`,
+      `sourceCommit=${commit}`,
+      `workflowCommit=${commit}`,
+      'targetRef=refs/heads/master',
+      `requestSha256=${requestSha256}`,
+      `targetAttestationBlob=${attestationBlob}`
+    ].join('\n') + '\n');
+    expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+
+  it('reports a malformed reviewed endpoint without emitting error.input', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-parse-'));
+    temporaryDirectories.push(directory);
+    const endpoint = 'wss://canary-target.example.test:bad/apiws?canary=query';
+    const keyCanary = 'Q0FOREVZLUtFWS1NQVRFUklBTC0xMjM0NTY3ODkwQUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVo=';
+    const requestPath = join(directory, 'request.json');
+    const outputPath = join(directory, 'github-output');
+    const requestContents = JSON.stringify({targetRef: 'refs/heads/master'});
+    writeFileSync(requestPath, requestContents);
+    writeFileSync(outputPath, '');
+    const {tree, targetBlob, gitEnvironment} = privateTargetTreeWithOverrides(directory, endpoint, keyCanary);
+    const result = spawnSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'diagnose-target',
+      '--request', requestPath,
+      '--workflow-commit', tree
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {
+        ...process.env,
+        ...gitEnvironment,
+        GITHUB_OUTPUT: outputPath,
+        ImageOS: 'ubuntu26',
+        ImageVersion: '20260927.149.1'
+      }
+    });
+    const requestSha256 = createHash('sha256').update(requestContents).digest('hex');
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe([
+      'failureCode=ENDPOINT_PARSE',
+      'imageOS=ubuntu26',
+      'imageVersion=20260927.149.1',
+      `node=${process.version}`,
+      `openssl=${process.versions.openssl}`,
+      `sourceCommit=${tree}`,
+      `workflowCommit=${tree}`,
+      'targetRef=refs/heads/master',
+      `requestSha256=${requestSha256}`,
+      `targetAttestationBlob=${targetBlob}`
+    ].join('\n') + '\n');
+    expect(result.stdout).not.toContain('canary-target.example.test');
+    expect(result.stdout).not.toContain(endpoint);
+    expect(result.stdout).not.toContain(keyCanary);
+    expect(result.stdout).not.toContain('error.input');
+    expect(result.stdout).not.toContain('Error:');
+    expect(result.stdout).not.toContain('    at ');
+    expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+
+  it('reports UNKNOWN and exits nonzero without writing GITHUB_OUTPUT', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-unknown-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    const outputPath = join(directory, 'github-output');
+    const requestContents = JSON.stringify({targetRef: 'refs/heads/master'});
+    writeFileSync(requestPath, requestContents);
+    writeFileSync(outputPath, '');
+    const workflowCommit = '0'.repeat(40);
+    const result = spawnSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'diagnose-target',
+      '--request', requestPath,
+      '--workflow-commit', workflowCommit
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {...process.env, GITHUB_OUTPUT: outputPath}
+    });
+    const requestSha256 = createHash('sha256').update(requestContents).digest('hex');
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toBe([
+      'failureCode=UNKNOWN',
+      `imageOS=${process.env.ImageOS && /^[a-z0-9]{1,32}$/.test(process.env.ImageOS) ? process.env.ImageOS : 'invalid'}`,
+      `imageVersion=${process.env.ImageVersion && /^[0-9.]{1,32}$/.test(process.env.ImageVersion) ? process.env.ImageVersion : 'invalid'}`,
+      `node=${process.version}`,
+      `openssl=${process.versions.openssl}`,
+      `workflowCommit=${workflowCommit}`,
+      'targetRef=refs/heads/master',
+      `requestSha256=${requestSha256}`
+    ].join('\n') + '\n');
+    expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+
+  it('rejects target, endpoint and key path override flags', () => {
+    const directory = mkdtempSync(join(tmpdir(), 'private-target-diagnostic-overrides-'));
+    temporaryDirectories.push(directory);
+    const requestPath = join(directory, 'request.json');
+    const outputPath = join(directory, 'github-output');
+    writeFileSync(requestPath, JSON.stringify({targetRef: 'refs/heads/master'}));
+    writeFileSync(outputPath, '');
+    const result = spawnSync(process.execPath, [
+      'scripts/private-artifact-release.mjs',
+      'diagnose-target',
+      '--request', requestPath,
+      '--workflow-commit', currentCommit(),
+      '--target-ref', 'refs/tags/release/canary',
+      '--endpoint', 'wss://canary-target.example.test/apiws?canary=query',
+      '--key-file', '/canary-key/private.pem'
+    ], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+      env: {...process.env, GITHUB_OUTPUT: outputPath}
+    });
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe('');
+    expect(result.stdout.trimEnd().split('\n')[0]).toBe('failureCode=UNKNOWN');
+    expect(result.stdout).not.toContain('canary-target.example.test');
+    expect(result.stdout).not.toContain('/canary-key/private.pem');
+    expect(readFileSync(outputPath, 'utf8')).toBe('');
+  });
+});
+
 function publicationEnvironment(commit, ref = 'refs/heads/master') {
   return {
     ...environment,
@@ -748,4 +1111,42 @@ function previousTargetTree(directory) {
     objectDirectory: join(gitDirectory, 'objects'),
     alternateObjectDirectory: resolve(repositoryRoot, repositoryObjectDirectory)
   };
+}
+
+function privateTargetTreeWithOverrides(directory, endpoint, keyContents) {
+  const gitDirectory = join(directory, 'diagnostic-target.git');
+  execFileSync('git', ['init', '--bare', '--quiet', gitDirectory], {cwd: repositoryRoot});
+  const repositoryObjectDirectory = resolve(repositoryRoot, execFileSync('git', ['rev-parse', '--git-path', 'objects'], {
+    cwd: repositoryRoot,
+    encoding: 'utf8'
+  }).trim());
+  const gitEnvironment = {
+    GIT_DIR: gitDirectory,
+    GIT_OBJECT_DIRECTORY: join(gitDirectory, 'objects'),
+    GIT_ALTERNATE_OBJECT_DIRECTORIES: repositoryObjectDirectory
+  };
+  const gitOptions = {
+    cwd: repositoryRoot,
+    encoding: 'utf8',
+    env: {...process.env, ...gitEnvironment}
+  };
+  const reviewedTarget = JSON.parse(readFileSync(join(repositoryRoot, REVIEWED_PRIVATE_TARGET), 'utf8'));
+  reviewedTarget.MTPROTO_PRIVATE_ENDPOINT = endpoint;
+  reviewedTarget.MTPROTO_PRIVATE_RSA_PUBLIC_KEY_FILE = 'ci/canary-private-target-public.pem';
+  reviewedTarget.publicKeySha256 = createHash('sha256').update(keyContents).digest('hex');
+  const targetBlob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+    ...gitOptions,
+    input: JSON.stringify(reviewedTarget, null, 2) + '\n'
+  }).trim();
+  const keyBlob = execFileSync('git', ['hash-object', '-w', '--stdin'], {
+    ...gitOptions,
+    input: keyContents
+  }).trim();
+  const baseCommit = currentCommit();
+  execFileSync('git', ['read-tree', baseCommit], gitOptions);
+  execFileSync('git', ['update-index', '--add', '--cacheinfo', `100644,${targetBlob},${REVIEWED_PRIVATE_TARGET}`], gitOptions);
+  execFileSync('git', ['update-index', '--add', '--cacheinfo', `100644,${keyBlob},ci/canary-private-target-public.pem`], gitOptions);
+  const tree = execFileSync('git', ['write-tree'], gitOptions).trim();
+
+  return {tree, targetBlob, gitEnvironment};
 }
