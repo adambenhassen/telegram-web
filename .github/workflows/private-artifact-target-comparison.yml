@@ -1,0 +1,86 @@
+name: Private MTProto Target Comparison
+
+on:
+  workflow_dispatch:
+    inputs:
+      request_run_id:
+        description: Successful private artifact request workflow run ID
+        required: true
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  compare:
+    name: Compare ${{ matrix.runner }} (${{ matrix.node }} Node)
+    if: github.ref == 'refs/heads/master'
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            node: image
+          - runner: ubuntu-24.04
+            node: pinned
+          - runner: ubuntu-26.04
+            node: image
+          - runner: ubuntu-26.04
+            node: pinned
+    env:
+      REQUEST_RUN_ID: ${{ inputs.request_run_id }}
+
+    steps:
+      - name: Check out diagnostic workflow commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up pinned Node.js
+        if: matrix.node == 'pinned'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24.18.0
+
+      - name: Validate request run metadata
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUEST_RUN_ID" =~ ^[0-9]+$ ]]; then
+            exit 1
+          fi
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${REQUEST_RUN_ID}" |
+            node scripts/private-artifact-target-comparison.mjs validate-run \
+              "$RUNNER_TEMP/private-artifact-request-run.json"
+
+      - name: Download the data-only request artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ ! "$REQUEST_RUN_ID" =~ ^[0-9]+$ ]]; then
+            exit 1
+          fi
+          gh run download "$REQUEST_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name private-artifact-request \
+            --dir "$RUNNER_TEMP/private-artifact-request"
+
+      - name: Verify request and resolved source provenance
+        run: >-
+          node scripts/private-artifact-target-comparison.mjs verify-request
+          "$RUNNER_TEMP/private-artifact-request-run.json"
+          "$RUNNER_TEMP/private-artifact-request"
+          "$RUNNER_TEMP/private-artifact-comparison.json"
+
+      - name: Run redacted private-target diagnostic
+        run: >-
+          node scripts/private-artifact-target-comparison.mjs diagnose
+          "$RUNNER_TEMP/private-artifact-comparison.json"
+          "$RUNNER_TEMP/private-artifact-request"
